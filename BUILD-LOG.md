@@ -134,3 +134,20 @@ Room providers restored to AppModule.
 
 **Not yet device-verified (needs phone):** streaming jank, resume-mid-turn,
 60fps feel. Server-side behavior backing each was probe-proven in Phase 0.
+
+---
+
+## 2026-08-16 — Phase 3: Authority
+
+**Did:** HermesNotifier (approval.request → HIGH notification w/ Allow once/Deny
+actions + hermes:// deep-link body; turn-complete quiet notif; in-app answer
+dismisses); ApprovalActionReceiver (resolves over live socket without opening
+the app); TurnForegroundService (dataSync FGS held ONLY while turnPhase=RUNNING);
+offline outbox (Room entity, exactly-once flush on Connected, ordered);
+hermes://session/<id> deep links via DeepLinkBus → resumeAndOpen; globalEvents
+tap on ConnectionManager for app-wide event fan-out.
+
+**Verified:** compile ✓ · test 11/11 ✓ · lint 0 errors ✓ · assembleDebug ✓.
+**APK: 40.3 MB (unchanged).**
+**Phone-needed:** notification actions end-to-end, deep link from Telegram,
+battery-idle check.

@@ -13,6 +13,7 @@
 
     <!-- Holds the RPC socket while a turn is live (Phase 3) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <application
         android:name=".HermesApplication"
@@ -48,6 +49,17 @@
                 <data android:scheme="hermes" android:host="session" />
             </intent-filter>
         </activity>
+
+        <!-- Holds process importance while a turn is live; stops when idle -->
+        <service
+            android:name=".service.TurnForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- Approval notification actions (Allow/Deny without opening the app) -->
+        <receiver
+            android:name=".core.notify.ApprovalActionReceiver"
+            android:exported="false" />
 
     </application>
 

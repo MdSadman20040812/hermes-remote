@@ -12,8 +12,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -59,6 +62,18 @@ class ConnectionManager @Inject constructor(
     /** Live socket state of the active client (Disconnected when none). */
     private val _channelState = MutableStateFlow<ChannelState>(ChannelState.Disconnected)
     val channelState: StateFlow<ChannelState> = _channelState.asStateFlow()
+
+    /**
+     * Every event from the active socket, app-wide (approvals, completion
+     * notices for sessions nobody is watching, change broadcasts). The
+     * notifier and the outbox collect this; screens should prefer their own
+     * scoped engine.
+     */
+    private val _globalEvents = MutableSharedFlow<com.hermes.mobile.core.transport.HermesEvent>(
+        extraBufferCapacity = 256,
+    )
+    val globalEvents: SharedFlow<com.hermes.mobile.core.transport.HermesEvent> =
+        _globalEvents.asSharedFlow()
 
     private var activeProfile: ConnectionProfile? = null
     private var watchJob: Job? = null
@@ -170,6 +185,9 @@ class ConnectionManager @Inject constructor(
     private fun startWatching(profile: ConnectionProfile, watched: HermesClient) {
         watchJob?.cancel()
         watchJob = managerScope.launch {
+            launch {
+                watched.rpc.events.collect { _globalEvents.tryEmit(it) }
+            }
             watched.rpc.state.collect { channelState ->
                 _channelState.value = channelState
                 when (channelState) {

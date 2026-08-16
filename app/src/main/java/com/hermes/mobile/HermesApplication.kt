@@ -4,14 +4,23 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import com.hermes.mobile.core.notify.HermesNotifier
+import com.hermes.mobile.data.repo.OutboxRepository
 import dagger.hilt.android.HiltAndroidApp
+import javax.inject.Inject
 
 @HiltAndroidApp
 class HermesApplication : Application() {
 
+    @Inject lateinit var notifier: HermesNotifier
+    @Inject lateinit var outbox: OutboxRepository
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
+        // Approval/turn notifications + offline outbox flush, app-scoped.
+        notifier.start()
+        outbox.start()
     }
 
     private fun createNotificationChannels() {

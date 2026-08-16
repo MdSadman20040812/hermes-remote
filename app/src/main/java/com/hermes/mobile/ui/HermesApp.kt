@@ -48,6 +48,7 @@ fun HermesApp(
     vm: ShellViewModel = hiltViewModel(),
     connectVm: ConnectViewModel = hiltViewModel(),
     cockpitVm: CockpitViewModel = hiltViewModel(),
+    deepLinkBus: DeepLinkBus = vm.deepLinkBus,
 ) {
     HermesMobileTheme {
         val conn by vm.connState.collectAsState()
@@ -60,6 +61,14 @@ fun HermesApp(
         }
         LaunchedEffect(Unit) {
             cockpitVm.userMessage.collect { snackbar.showSnackbar(it) }
+        }
+
+        // Telegram doorbell / notification deep links → open that session.
+        LaunchedEffect(Unit) {
+            deepLinkBus.links.collect { storedId ->
+                cockpitVm.resumeAndOpen(storedId, "Linked session")
+                selectedTab = 0
+            }
         }
 
         when (conn) {

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.hermes.mobile.core.connection.ConnState
 import com.hermes.mobile.core.connection.ConnectionManager
+import com.hermes.mobile.data.repo.OutboxRepository
 import com.hermes.mobile.data.repo.SessionRepository
 import com.hermes.mobile.data.repo.TranscriptRepository
 import com.hermes.mobile.domain.model.TranscriptItem
@@ -23,6 +24,9 @@ class CockpitViewModel @Inject constructor(
     private val connectionManager: ConnectionManager,
     private val sessionRepository: SessionRepository,
     private val transcriptRepository: TranscriptRepository,
+    private val outboxRepository: OutboxRepository,
+    private val notifier: com.hermes.mobile.core.notify.HermesNotifier,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
 ) : ViewModel() {
 
     private val _items = MutableStateFlow<List<TranscriptItem>>(emptyList())
@@ -44,6 +48,24 @@ class CockpitViewModel @Inject constructor(
 
     private var engine: TranscriptRepository.Engine? = null
     private var liveSessionId: String? = null
+
+    init {
+        // Hold process importance while a turn runs; release immediately after.
+        // Also relay outbox flush notices to the snackbar channel.
+        viewModelScope.launch {
+            turnPhase.collect { phase ->
+                when (phase) {
+                    TurnPhase.RUNNING -> com.hermes.mobile.service.TurnForegroundService.start(
+                        appContext, "Hermes turn running",
+                    )
+                    TurnPhase.IDLE -> com.hermes.mobile.service.TurnForegroundService.stop(appContext)
+                }
+            }
+        }
+        viewModelScope.launch {
+            outboxRepository.notices.collect { _userMessage.emit(it) }
+        }
+    }
 
     /** Open a session by live handle (from create/resume) and attach the engine. */
     fun openLiveSession(sessionId: String, title: String? = null) {
@@ -107,8 +129,11 @@ class CockpitViewModel @Inject constructor(
     }
 
     private suspend fun doSend(sid: String, text: String) {
-        val client = connectionManager.clientFlow.value ?: run {
-            _userMessage.emit("Not connected")
+        val client = connectionManager.clientFlow.value
+        if (client == null || connectionManager.state.value !is ConnState.Connected) {
+            outboxRepository.enqueue(sid, text)
+            engine?.echoUser(text)
+            _userMessage.emit("Offline — prompt queued, will send on reconnect")
             return
         }
         engine?.echoUser(text)
@@ -117,7 +142,8 @@ class CockpitViewModel @Inject constructor(
             client.promptSubmit(sid, text)
         } catch (e: Exception) {
             _turnPhase.value = TurnPhase.IDLE
-            _userMessage.emit("Send failed: ${e.message}")
+            outboxRepository.enqueue(sid, text)
+            _userMessage.emit("Send failed — queued for reconnect (${e.message})")
         }
     }
 
@@ -149,6 +175,7 @@ class CockpitViewModel @Inject constructor(
             try {
                 connectionManager.clientFlow.value?.approvalRespond(card.sessionId, choice)
                 engine?.markApprovalResolved(card.key, choice)
+                notifier.dismissForSession(card.sessionId)
             } catch (e: Exception) {
                 _userMessage.emit("Approval response failed: ${e.message}")
             }

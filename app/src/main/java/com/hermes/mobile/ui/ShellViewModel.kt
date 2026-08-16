@@ -14,6 +14,7 @@ import javax.inject.Inject
 @HiltViewModel
 class ShellViewModel @Inject constructor(
     private val connectionManager: ConnectionManager,
+    val deepLinkBus: DeepLinkBus,
 ) : ViewModel() {
 
     val connState: StateFlow<ConnState> = connectionManager.state

@@ -62,12 +62,37 @@ interface MessageDao {
     suspend fun clearSession(sessionId: String)
 }
 
+/** Offline outbox (spec §E.1.5, Phase 3): prompts composed while disconnected. */
+@Entity(tableName = "outbox")
+data class OutboxEntity(
+    @PrimaryKey(autoGenerate = true) val rowId: Long = 0,
+    val sessionId: String, // live handle; empty means "create a session first"
+    val text: String,
+    val queuedAt: Long = System.currentTimeMillis(),
+)
+
+@Dao
+interface OutboxDao {
+    @Query("SELECT * FROM outbox ORDER BY queuedAt ASC")
+    suspend fun pending(): List<OutboxEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun enqueue(item: OutboxEntity): Long
+
+    @Query("DELETE FROM outbox WHERE rowId = :rowId")
+    suspend fun delete(rowId: Long)
+
+    @Query("SELECT COUNT(*) FROM outbox")
+    fun count(): Flow<Int>
+}
+
 @Database(
-    entities = [SessionEntity::class, MessageEntity::class],
-    version = 2,
+    entities = [SessionEntity::class, MessageEntity::class, OutboxEntity::class],
+    version = 3,
     exportSchema = false,
 )
 abstract class HermesDatabase : RoomDatabase() {
     abstract fun sessionDao(): SessionDao
     abstract fun messageDao(): MessageDao
+    abstract fun outboxDao(): OutboxDao
 }

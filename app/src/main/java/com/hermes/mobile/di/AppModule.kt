@@ -65,6 +65,10 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideOutboxDao(db: HermesDatabase) = db.outboxDao()
+
+    @Provides
+    @Singleton
     fun provideConnectionManager(
         vault: SecureVault,
         clientFactory: HermesClientFactory,
