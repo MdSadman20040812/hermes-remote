@@ -1,12 +1,16 @@
 package com.hermes.mobile.di
 
+import android.content.Context
+import androidx.room.Room
 import com.hermes.mobile.BuildConfig
 import com.hermes.mobile.core.connection.ConnectionManager
 import com.hermes.mobile.core.connection.HermesClientFactory
 import com.hermes.mobile.core.vault.SecureVault
+import com.hermes.mobile.data.local.HermesDatabase
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -42,6 +46,22 @@ object AppModule {
             .addInterceptor(logging)
             .build()
     }
+
+    // ---- Room (v2 derived-state cache — server is authoritative) ----
+    @Provides
+    @Singleton
+    fun provideDatabase(@ApplicationContext ctx: Context): HermesDatabase =
+        Room.databaseBuilder(ctx, HermesDatabase::class.java, "hermes-v2.db")
+            .fallbackToDestructiveMigration()
+            .build()
+
+    @Provides
+    @Singleton
+    fun provideSessionDao(db: HermesDatabase) = db.sessionDao()
+
+    @Provides
+    @Singleton
+    fun provideMessageDao(db: HermesDatabase) = db.messageDao()
 
     @Provides
     @Singleton

@@ -52,6 +52,10 @@ class ConnectionManager @Inject constructor(
     var client: HermesClient? = null
         private set
 
+    /** Reactive view of [client] — repositories collect this to survive reconnects. */
+    private val _clientFlow = MutableStateFlow<HermesClient?>(null)
+    val clientFlow: StateFlow<HermesClient?> = _clientFlow.asStateFlow()
+
     /** Live socket state of the active client (Disconnected when none). */
     private val _channelState = MutableStateFlow<ChannelState>(ChannelState.Disconnected)
     val channelState: StateFlow<ChannelState> = _channelState.asStateFlow()
@@ -138,6 +142,7 @@ class ConnectionManager @Inject constructor(
 
         val newClient = clientFactory.newClient(managerScope)
         client = newClient
+        _clientFlow.value = newClient
         activeProfile = profile
 
         // REST first: proves reachability + gives us /api/status for the banner.
@@ -197,6 +202,7 @@ class ConnectionManager @Inject constructor(
         reconnectJob?.cancel()
         client?.rpc?.disconnect()
         client = null
+        _clientFlow.value = null
     }
 
     fun forgetProfile(id: String) {

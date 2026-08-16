@@ -109,3 +109,28 @@ shows only this PC). ADB wireless pairing also still needs the phone in hand.**
 
 **Surprises:** Kotlin nested block comments make `/api/*` inside KDoc a compile
 error. `dashboard --stop` doesn't see bash-launched dashboard processes.
+
+---
+
+## 2026-08-16 (late) — Phase 2: Cockpit
+
+**Did:** domain models (TranscriptItem sealed, SessionSummary); Room v2 cache
+(sessions+messages, destructive-migration, new hermes-v2.db); SessionRepository
+(list/create/resume w/ live-vs-stored id handling); TranscriptRepository engine
+(20fps flush ticker, delta buffers, tool timeline, approval cards, history
+hydration/reconcile); CockpitViewModel/Screen (status rail, transcript,
+thinking blocks, expandable tool rows, approval cards w/ choices, interrupt +
+steer bar, composer, haptics, 48dp targets, contentDescriptions);
+SessionsViewModel/Screen; 3-tab NavigationSuiteScaffold shell (Cockpit /
+Sessions / Ops) with activity-scoped VMs; userMessage channels wired to one
+SnackbarHost.
+
+**Verified:** compile ✓ · test 11/11 ✓ · lint 0 errors ✓ · assembleDebug ✓.
+**APK: 42,249,400 B = 40.3 MB** (+0.8 MB vs Phase 1: Room + adaptive suite).
+
+**Fixes en route:** adaptive-navigation-suite coordinate is
+`androidx.compose.material3:material3-adaptive-navigation-suite` (BOM-managed);
+Room providers restored to AppModule.
+
+**Not yet device-verified (needs phone):** streaming jank, resume-mid-turn,
+60fps feel. Server-side behavior backing each was probe-proven in Phase 0.
