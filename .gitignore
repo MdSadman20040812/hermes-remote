@@ -16,3 +16,6 @@ local.properties
 
 # OS
 Thumbs.db
+
+# Phase 0 probe secrets
+pc/.probe-token

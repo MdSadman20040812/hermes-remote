@@ -149,7 +149,22 @@ feed. Also `/api/plugins/kanban/events` for the Kanban board and
 
 ## A.3 Auth model — and exactly how the phone gets in
 
-From `web_server.py`, three modes:
+> **⚠ 2026-08-16 empirical correction (Phase 0):** the "insecure" row below is
+> **historical**. The June 2026 hardening removed unauthenticated non-loopback
+> mode: `should_require_auth()` returns True for ANY non-loopback host,
+> `--insecure` is now a NO-OP, and the server **refuses to start** on a
+> non-loopback bind with no registered auth provider. In gated mode `?token=`
+> is unconditionally rejected; the only WS credentials are single-use 30 s
+> `?ticket=` (from `POST /api/auth/ws-ticket`) and the server-internal
+> `?internal=` credential. Available providers: basic-auth password
+> (`dashboard.basic_auth.username` + `password_hash` in config.yaml, hash via
+> `plugins.dashboard_auth.basic.hash_password`) or OAuth (Nous Portal
+> `hermes dashboard register`). **Phone flow is therefore: REST login → session
+> → `/api/auth/ws-ticket` → `ws://…?ticket=` per connect.** The
+> `CredentialStrategy` Ticket branch below is the primary path, not a future
+> option. (Verified against `web_server.py` + live `dashboard --help`.)
+
+From `web_server.py`, three modes (pre-hardening; see correction above):
 
 | Mode | Trigger | WS credential | Peer restriction |
 |---|---|---|---|
@@ -664,8 +679,8 @@ deserves a straight look.
 | Phone lost/stolen | Biometric gate (`BiometricPrompt`) on app open and again before any destructive op. Token in `EncryptedSharedPreferences` with StrongBox when available. Remote revoke = rotate `HERMES_DASHBOARD_SESSION_TOKEN` and restart the dashboard. |
 | Network interception | Tailscale = WireGuard, E2E encrypted. Nothing on the public internet. No port forwarding. |
 | Token leakage | Never in logs, never in the clipboard, never in a chat message. QR pairing means it's never typed. Store a fingerprint for display; show only last 4 chars in the UI. |
-| Dashboard exposed by accident | Bind to the tailnet IP explicitly, never `0.0.0.0`. Add a startup assertion in the launcher script. |
-| Rogue prompt / prompt injection | Keep `approvals.mode: manual` for `shell`/`file`-write toolsets even with the phone in the loop. The phone makes manual approval *convenient*, which is exactly what makes it sustainable. |
+| Dashboard exposed by accident | Bind to the tailnet IP explicitly, never `0.0.0.0`. Add a startup assertion in the launcher script. (Post-hardening bonus: any non-loopback bind force-enables the auth gate — fail-closed.) |
+| Rogue prompt / prompt injection | Keep `approvals.mode: manual` for `shell`/`file`-write toolsets even with the phone in the loop. **Phase 0 caveat:** manual mode gates only dangerous-pattern commands — benign commands (`echo`, single-file `rm`, file writes) run ungated. The phone's approval UI must treat `approval.request` as rare-but-critical. |
 | Agent runs away while you're asleep | Panic button (§E.3 #18) + `agent.max_turns: 150` already set + turn-count and cost alerts pushed to the phone. |
 
 **⚠️ Immediate finding, unrelated to the app:** `D:\.hermes\config.yaml` contains a

@@ -25,3 +25,34 @@ Append-only. One entry per work session.
   transport-independent and don't pre-commit the networking decision.
 
 **APK size:** n/a (no build changes). **Commit:** initial checkpoint.
+
+---
+
+## 2026-08-16 — Phase 0 (complete on loopback): architecture PROVEN
+
+**Did:**
+- Token generated (`.env` write blocked by approval timeout → used process env;
+  `pc/.probe-token`, gitignored, holds it meanwhile).
+- Dashboard up on 127.0.0.1:9119 (`--no-open --skip-build`), `auth_required=false`.
+- `pc/probe_ws.py`: gateway.ready, session.list (saw live desktop session),
+  session.create, streaming prompt (PROBE OK), interrupt from cold client,
+  PTY echo round-trip. All passed. Full log: `pc/probe_output.txt`.
+- `pc/probe_approval.py`: forced a real gate with `rm -rf` on a scratch dir —
+  captured literal `approval.request`, `approval.respond(once)` → `{"resolved":1}`
+  → tool executed. ROUND-TRIP PROVEN.
+- First-delta latency: 438 ms / 3 656 ms (model-bound, not transport).
+- Corrected spec §A.3 (auth gate) and §F (approval coverage) in place.
+
+**Broke / surprises:**
+- First probe run died by SIGPIPE (piped through `head`) — server cleanly
+  emitted `session.reclaimed`/`ws_orphan_reap`. Mobile app-kills are safe.
+- `echo`, `printf >`, single-file `rm` DON'T gate in manual mode — only
+  dangerous-pattern commands do. Rare-but-critical approval UX it is.
+- `session.create` returns TWO ids: live `session_id` vs `stored_session_id`.
+- `/api/pty` is a full Hermes TUI chat, binary-frame transport, works on
+  Windows via ConPTY.
+
+**Still open (owner):** Tailscale install decision; `.env` token persistence
+consent; §12 GitHub PAT rotation (needs his GitHub login).
+
+**Commit:** phase-0 complete. **APK size:** n/a.
