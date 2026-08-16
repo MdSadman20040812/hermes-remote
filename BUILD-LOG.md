@@ -56,3 +56,56 @@ Append-only. One entry per work session.
 consent; §12 GitHub PAT rotation (needs his GitHub login).
 
 **Commit:** phase-0 complete. **APK size:** n/a.
+
+---
+
+## 2026-08-16 (evening) — Environment fixes + gated-mode proof + Phase 1 spine
+
+**Environment:**
+- §12 DONE: config.yaml github MCP env → `'${GITHUB_TOKEN}'` (verified the MCP
+  spawn-time interpolation path resolves it to the real PAT after the standard
+  dotenv load); both `config.yaml.bak.*` files scrubbed; zero `ghp_` left in
+  D:\.hermes config files. Token ROTATION still needs his GitHub web session.
+- `.env` write (HERMES_DASHBOARD_SESSION_TOKEN) blocked 3× by approval timeout.
+  Token lives in `pc/.probe-token`; hermes-remote.ps1 will persist it on his run.
+- Temurin 17.0.20.8 actually installed (winget log had lied — D:\Android\JDK was
+  an empty dir). JAVA_HOME fixed for session + `setx` for the user.
+- **Tailscale installed + logged in: warnerbros-PC = 100.88.18.123.**
+- `dashboard.basic_auth` configured (user `sadman`, password in gitignored
+  `pc/.dashboard-password`, hash in config.yaml).
+- **Gated flow proven live over tailnet** (`pc/probe_gated.py`): /api/status
+  public 200 · `?token=` → 403 · password-login → 3 cookies · ws-ticket mint
+  (30s) · `?ticket=` → gateway.ready + session.list (200 sessions) · ticket
+  single-use enforced. **This is the Android client's exact path.**
+
+**Phase 1 build:**
+- Deleted v1: Drive/GMS/Telegram data sources, WorkManager sync, Room v1 schema,
+  all Drive-coupled screens/VMs, TransferForegroundService, auth screens.
+- Gradle: removed play-services-auth, google-api-client, drive, work-runtime,
+  hilt-work, coroutines-play-services, media3, markwon, pdfviewer, coil;
+  deleted the two BuildConfig placeholder fields (never filled, per §4.5);
+  added CameraX 1.3.4 + ML Kit barcode 17.2.0 (bundled, no GMS) + coroutines-test.
+- New: core/transport (Frames/RpcChannel/RestClient/ReconnectPolicy/HermesClient),
+  core/connection (ConnectionProfile, CredentialStrategy, ConnectionManager with
+  reachability racing + backoff reconnect), core/vault/SecureVault
+  (EncryptedSharedPreferences), ui/connect (CameraX QR + manual entry),
+  ui/home (live /api/status proof), new shell + DI.
+- Manifest: cleartext=true (tailnet-only, documented), hermes://session deep
+  link registered, GMS/WorkManager entries removed.
+- PC launcher: `pc/hermes-remote.ps1` + `pc/render_qr.py` (qrcode vendored into
+  pc/vendor — Hermes venv untouched). ASCII QR verified rendering.
+- Unit tests: 11/11 pass (frame parsing against literal Phase-0 captures,
+  reconnect policy sequence/jitter/reset).
+
+**Verified:** compileDebugKotlin ✓ · test ✓ (11/11) · lint ✓ (0 errors,
+51 cosmetic warnings — mostly unused resources from deleted v1 screens) ·
+assembleDebug ✓.
+
+**APK: 41,459,784 B = 39.5 MB (was 70.8 MB, −44%). Telegram 50 MB sideload
+cap: PATH OPEN.**
+**adb: C:\Users\binma\Android\sdk\platform-tools\adb.exe present.**
+**Phone tailnet IP: UNKNOWN — phone not on tailnet yet (`tailscale status`
+shows only this PC). ADB wireless pairing also still needs the phone in hand.**
+
+**Surprises:** Kotlin nested block comments make `/api/*` inside KDoc a compile
+error. `dashboard --stop` doesn't see bash-launched dashboard processes.
