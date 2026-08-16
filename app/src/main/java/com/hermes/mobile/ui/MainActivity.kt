@@ -18,6 +18,7 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
 
     @Inject lateinit var deepLinkBus: DeepLinkBus
+    @Inject lateinit var shareBus: ShareBus
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -36,10 +37,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
-        val data = intent?.data ?: return
-        if (data.scheme == "hermes" && data.host == "session") {
-            val id = data.pathSegments.firstOrNull() ?: return
-            deepLinkBus.offer(id)
+        when (intent?.action) {
+            Intent.ACTION_VIEW -> {
+                val data = intent.data ?: return
+                if (data.scheme == "hermes" && data.host == "session") {
+                    val id = data.pathSegments.firstOrNull() ?: return
+                    deepLinkBus.offer(id)
+                }
+            }
+            Intent.ACTION_SEND -> {
+                // "Send to Hermes" share target — shared text/URL becomes a prompt.
+                val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+                    ?: intent.getStringExtra(Intent.EXTRA_SUBJECT)
+                if (!text.isNullOrBlank()) shareBus.offer(text)
+            }
         }
     }
 }

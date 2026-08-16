@@ -15,6 +15,7 @@ import javax.inject.Inject
 class ShellViewModel @Inject constructor(
     private val connectionManager: ConnectionManager,
     val deepLinkBus: DeepLinkBus,
+    val shareBus: ShareBus,
 ) : ViewModel() {
 
     val connState: StateFlow<ConnState> = connectionManager.state

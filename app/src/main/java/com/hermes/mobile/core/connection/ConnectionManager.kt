@@ -223,6 +223,9 @@ class ConnectionManager @Inject constructor(
         _clientFlow.value = null
     }
 
+    /** Secret lookup for ancillary channels (PTY socket auth). Never log the result. */
+    fun vaultSecret(profileId: String): String? = vault.secretFor(profileId)
+
     fun forgetProfile(id: String) {
         if (activeProfile?.id == id) {
             disconnect()

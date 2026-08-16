@@ -32,6 +32,7 @@ import com.hermes.mobile.ui.cockpit.CockpitViewModel
 import com.hermes.mobile.ui.connect.ConnectScreen
 import com.hermes.mobile.ui.connect.ConnectViewModel
 import com.hermes.mobile.ui.home.HomeScreen
+import com.hermes.mobile.ui.ops.OpsScreen
 import com.hermes.mobile.ui.sessions.SessionsScreen
 import com.hermes.mobile.ui.theme.HermesMobileTheme
 
@@ -71,6 +72,14 @@ fun HermesApp(
             }
         }
 
+        // "Send to Hermes" shares → new prompt in the cockpit.
+        LaunchedEffect(Unit) {
+            vm.shareBus.shares.collect { text ->
+                cockpitVm.send(text)
+                selectedTab = 0
+            }
+        }
+
         when (conn) {
             is ConnState.Connected -> NavigationSuiteScaffold(
                 navigationSuiteItems = {
@@ -96,7 +105,7 @@ fun HermesApp(
                                 cockpitVm.resumeAndOpen(summary.id, summary.title)
                                 selectedTab = 0
                             })
-                            2 -> HomeScreen()
+                            2 -> OpsScreen()
                         }
                     }
                 }

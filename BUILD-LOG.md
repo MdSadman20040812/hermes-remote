@@ -151,3 +151,21 @@ tap on ConnectionManager for app-wide event fan-out.
 **APK: 40.3 MB (unchanged).**
 **Phone-needed:** notification actions end-to-end, deep link from Telegram,
 battery-idle check.
+
+---
+
+## 2026-08-16 — Phase 4: Reach
+
+**Did:** core/terminal — PtySanitizer + PtyMobileInput PORTED from
+web/src/lib/pty-*.ts (with the TS test expectations as unit tests); PtyChannel
+(binary WS, close-code taxonomy 4401/03/04/08/10, reconnect throttle constants);
+TerminalScreen (ANSI-stripped scrollback capped 256KB, key row
+Esc/Tab/arrows/Ctrl-C/Ctrl-D/|/~/); FileRepository + FilesScreen (browse, text/
+image preview via data_url); ShareBus + ACTION_SEND target; Ops tab hosting
+status/Terminal/Files panes. Literal control bytes in sources normalized to
+explicit \uXXXX escapes (Kotlin-invisible-char hazard — repeat offender, noted).
+
+**Verified:** compile ✓ · tests ✓ · lint 0 errors ✓ · assembleDebug ✓.
+**APK: 40.3 MB (unchanged).**
+**Phone-needed:** real terminal session feel, file download-to-device, share
+from Chrome.
