@@ -1,0 +1,15 @@
+<resources>
+    <color name="hermes_deep">#FF0D1117</color>
+    <color name="hermes_surface">#FF161B22</color>
+    <color name="hermes_surface_variant">#FF21262D</color>
+    <color name="hermes_border">#FF30363D</color>
+    <color name="hermes_primary">#FF7C5CFC</color>
+    <color name="hermes_primary_container">#FF4B3FD1</color>
+    <color name="hermes_secondary">#FF58A6FF</color>
+    <color name="hermes_accent">#FF39D353</color>
+    <color name="hermes_error">#FFF85149</color>
+    <color name="hermes_warning">#FFD29922</color>
+    <color name="hermes_on_primary">#FFFFFFFF</color>
+    <color name="hermes_on_surface">#FFE6EDF3</color>
+    <color name="hermes_on_surface_variant">#FF8B949E</color>
+</resources>
