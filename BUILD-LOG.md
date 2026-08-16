@@ -169,3 +169,24 @@ explicit \uXXXX escapes (Kotlin-invisible-char hazard — repeat offender, noted
 **APK: 40.3 MB (unchanged).**
 **Phone-needed:** real terminal session feel, file download-to-device, share
 from Chrome.
+
+---
+
+## 2026-08-16 — Phases 5 and 6: Ops + Delight
+
+**Did:** OpsRepository (system.stats, process.list/kill, gateway start/stop/
+restart, logs, analytics/usage, model options+set, skills, cron — all lenient
+parsing); OpsScreen expanded (status card w/ CPU/RAM, model switcher, gateway
+controls, skills + cron summaries, two-step PANIC button); QuickTileService
+(API-34-safe startActivityAndCollapse); home-screen widget (RemoteViews — the
+one layout XML, platform constraint); VoiceInputController (on-device
+SpeechRecognizer) + mic button in composer w/ RECORD_AUDIO runtime prompt;
+share-sheet ACTION_SEND already landed in P4.
+
+**Deferred (documented, not silently dropped):** TTS playback
+(/api/audio/speak-stream), Kanban board UI, multi-agent spawn-tree view, pets
+screen, Wear OS — all additive Tier-3 surfaces with the transport already
+proven; they slot into the existing Ops/Cockpit pattern when wanted.
+
+**Verified:** compile ✓ · test 21/21 ✓ · lint 0 errors ✓ · assembleDebug ✓.
+**Final APK: 41,862,772 B = 39.9 MB (v1 was 70.8 MB, −44%).**

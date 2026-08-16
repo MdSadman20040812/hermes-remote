@@ -49,6 +49,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.google.accompanist.permissions.isGranted
 import com.hermes.mobile.core.connection.ConnState
 import com.hermes.mobile.domain.model.TranscriptItem
 import com.hermes.mobile.domain.model.TurnPhase
@@ -369,31 +370,70 @@ private fun LiveTurnBar(onInterrupt: () -> Unit, onSteer: (String) -> Unit) {
     }
 }
 
+@OptIn(com.google.accompanist.permissions.ExperimentalPermissionsApi::class)
 @Composable
 private fun Composer(onSend: (String) -> Unit) {
     var text by remember { mutableStateOf("") }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val voice = remember { com.hermes.mobile.core.voice.VoiceInputController(context) }
+    val listening by voice.listening.collectAsState()
+    val partial by voice.partial.collectAsState()
+
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        voice.onFinalResult = { spoken -> text = spoken }
+        onDispose { voice.destroy() }
+    }
+
+    val micPermission = com.google.accompanist.permissions.rememberPermissionState(
+        android.Manifest.permission.RECORD_AUDIO,
+    )
+
     Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                placeholder = { Text("Message Hermes…") },
-                maxLines = 4,
-                modifier = Modifier
-                    .weight(1f)
-                    .semantics { contentDescription = "Message input" },
-            )
-            Spacer(Modifier.size(8.dp))
-            IconButton(
-                onClick = { if (text.isNotBlank()) { onSend(text); text = "" } },
-                modifier = Modifier
-                    .size(48.dp)
-                    .semantics { contentDescription = "Send message" },
+        Column {
+            if (listening && partial.isNotBlank()) {
+                Text(
+                    partial,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                )
+            }
+            Row(
+                Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Default.Send, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    placeholder = { Text("Message Hermes…") },
+                    maxLines = 4,
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics { contentDescription = "Message input" },
+                )
+                Spacer(Modifier.size(8.dp))
+                IconButton(
+                    onClick = {
+                        if (micPermission.status.isGranted) {
+                            if (listening) voice.stop() else voice.start()
+                        } else {
+                            micPermission.launchPermissionRequest()
+                        }
+                    },
+                    modifier = Modifier
+                        .size(48.dp)
+                        .semantics { contentDescription = if (listening) "Stop voice input" else "Hold to talk" },
+                ) {
+                    Text(if (listening) "⏹" else "🎙")
+                }
+                IconButton(
+                    onClick = { if (text.isNotBlank()) { onSend(text); text = "" } },
+                    modifier = Modifier
+                        .size(48.dp)
+                        .semantics { contentDescription = "Send message" },
+                ) {
+                    Icon(Icons.Default.Send, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                }
             }
         }
     }

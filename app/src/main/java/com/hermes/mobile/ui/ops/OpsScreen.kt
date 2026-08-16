@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -25,6 +27,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.core.connection.ConnState
+import com.hermes.mobile.data.repo.str
 import com.hermes.mobile.ui.files.FilesScreen
 import com.hermes.mobile.ui.home.HomeViewModel
 import com.hermes.mobile.ui.terminal.TerminalScreen
@@ -77,9 +80,20 @@ private fun PaneScaffold(
 private fun OpsMenu(vm: HomeViewModel, onOpen: (OpsPane) -> Unit) {
     val conn by vm.connState.collectAsState()
     val channel by vm.channelState.collectAsState()
+    val opsVm: OpsViewModel = androidx.hilt.navigation.compose.hiltViewModel()
+    val stats by opsVm.stats.collectAsState()
+    val models by opsVm.models.collectAsState()
+    val currentModel by opsVm.currentModel.collectAsState()
+    val skills by opsVm.skills.collectAsState()
+    val cron by opsVm.cron.collectAsState()
+
+    androidx.compose.runtime.LaunchedEffect(Unit) { opsVm.refreshAll() }
 
     Column(
-        Modifier.fillMaxSize().padding(24.dp),
+        Modifier
+            .fillMaxSize()
+            .padding(24.dp)
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Ops", style = MaterialTheme.typography.headlineSmall)
@@ -100,12 +114,108 @@ private fun OpsMenu(vm: HomeViewModel, onOpen: (OpsPane) -> Unit) {
                     Text("socket: ${channel.toString().substringAfterLast('.')}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    stats?.let { s ->
+                        Text(
+                            "CPU ${s.str("cpu_percent") ?: s.str("cpu") ?: "?"} · " +
+                                "RAM ${s.str("memory_percent") ?: s.str("ram") ?: "?"}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                 }
             }
         }
 
         OpsButton("Terminal", "Full Hermes TUI on your PC") { onOpen(OpsPane.TERMINAL) }
         OpsButton("PC Files", "Browse, preview, download") { onOpen(OpsPane.FILES) }
+
+        // Model switcher
+        if (models.isNotEmpty()) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Model: ${currentModel ?: "?"}", style = MaterialTheme.typography.titleSmall)
+                    models.take(8).forEach { (label, id) ->
+                        TextButton(
+                            onClick = { opsVm.switchModel(id) },
+                            modifier = Modifier.semantics { contentDescription = "Switch to $label" },
+                        ) { Text(label, style = MaterialTheme.typography.bodySmall) }
+                    }
+                }
+            }
+        }
+
+        // Gateway controls
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { opsVm.gateway("restart") },
+                    modifier = Modifier.semantics { contentDescription = "Restart gateway" }) {
+                    Text("Restart gateway", style = MaterialTheme.typography.bodySmall)
+                }
+                TextButton(onClick = { opsVm.gateway("stop") },
+                    modifier = Modifier.semantics { contentDescription = "Stop gateway" }) {
+                    Text("Stop", color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall)
+                }
+                TextButton(onClick = { opsVm.gateway("start") },
+                    modifier = Modifier.semantics { contentDescription = "Start gateway" }) {
+                    Text("Start", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+
+        if (skills.isNotEmpty()) {
+            Text("Skills (${skills.size})", style = MaterialTheme.typography.titleSmall)
+            Text(skills.take(12).joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (cron.isNotEmpty()) {
+            Text("Cron (${cron.size})", style = MaterialTheme.typography.titleSmall)
+            cron.take(8).forEach {
+                Text(it, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        // Panic button (spec §E.3 #18): two-step confirm → interrupt + stop gateway.
+        var panicArmed by remember { mutableStateOf(false) }
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = if (panicArmed) MaterialTheme.colorScheme.errorContainer
+            else MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { contentDescription = "Panic button" },
+            onClick = {
+                if (panicArmed) {
+                    opsVm.gateway("stop")
+                    panicArmed = false
+                } else {
+                    panicArmed = true
+                }
+            },
+        ) {
+            Column(Modifier.padding(16.dp)) {
+                Text(
+                    if (panicArmed) "Tap again to STOP the gateway" else "Panic",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (panicArmed) MaterialTheme.colorScheme.onErrorContainer
+                    else MaterialTheme.colorScheme.error,
+                )
+                Text(
+                    "Stops the messaging gateway and halts dispatch.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 

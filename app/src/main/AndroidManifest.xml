@@ -15,6 +15,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
+    <!-- Hold-to-talk voice prompts (Phase 6) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <application
         android:name=".HermesApplication"
         android:allowBackup="false"
@@ -66,6 +69,31 @@
         <receiver
             android:name=".core.notify.ApprovalActionReceiver"
             android:exported="false" />
+
+        <!-- Home-screen widget (Phase 6) -->
+        <receiver
+            android:name=".ui.widget.HermesWidgetProvider"
+            android:exported="false"
+            android:label="Hermes Remote">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info" />
+        </receiver>
+
+        <!-- Quick Settings tile (Phase 6) -->
+        <service
+            android:name=".service.QuickTileService"
+            android:exported="true"
+            android:label="Hermes Remote"
+            android:icon="@mipmap/ic_launcher"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
     </application>
 
