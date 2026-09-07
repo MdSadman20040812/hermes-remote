@@ -1,15 +1,24 @@
 <resources>
-    <color name="hermes_deep">#FF0D1117</color>
-    <color name="hermes_surface">#FF161B22</color>
-    <color name="hermes_surface_variant">#FF21262D</color>
-    <color name="hermes_border">#FF30363D</color>
-    <color name="hermes_primary">#FF7C5CFC</color>
-    <color name="hermes_primary_container">#FF4B3FD1</color>
-    <color name="hermes_secondary">#FF58A6FF</color>
-    <color name="hermes_accent">#FF39D353</color>
-    <color name="hermes_error">#FFF85149</color>
-    <color name="hermes_warning">#FFD29922</color>
+    <!--
+        The XML mirror of the Compose dark scheme in ui/theme/Color.kt. These
+        exist for the things Compose cannot theme: the adaptive icon, the
+        splash window, and the pre-Compose window background. Keep them in step
+        with the Kotlin scheme — a violet here that disagrees with the one in
+        the app shows up as a colour shift on every cold start.
+    -->
+    <color name="hermes_deep">#FF0B0E14</color>
+    <color name="hermes_surface">#FF161B23</color>
+    <color name="hermes_surface_variant">#FF1C222B</color>
+    <color name="hermes_border">#FF2B333D</color>
+    <color name="hermes_primary">#FF6A45E8</color>
+    <color name="hermes_primary_dark">#FFA98BFF</color>
+    <color name="hermes_primary_container">#FF392A7A</color>
+    <color name="hermes_secondary">#FF7CC0FF</color>
+    <color name="hermes_accent">#FF5FE07A</color>
+    <color name="hermes_error">#FFFF897D</color>
+    <color name="hermes_warning">#FFF0C14B</color>
     <color name="hermes_on_primary">#FFFFFFFF</color>
     <color name="hermes_on_surface">#FFE6EDF3</color>
-    <color name="hermes_on_surface_variant">#FF8B949E</color>
+    <color name="hermes_on_surface_variant">#FF9FABB8</color>
+    <color name="hermes_window_light">#FFF7F8FA</color>
 </resources>

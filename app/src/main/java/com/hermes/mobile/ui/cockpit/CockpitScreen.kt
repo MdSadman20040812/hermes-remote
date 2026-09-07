@@ -1,10 +1,22 @@
 package com.hermes.mobile.ui.cockpit
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,209 +24,333 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.ArrowDownward
+import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.Stop
+import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import kotlinx.coroutines.launch
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
-import com.hermes.mobile.core.connection.ConnState
+import com.google.accompanist.permissions.rememberPermissionState
+import com.hermes.mobile.domain.model.SlashCommand
 import com.hermes.mobile.domain.model.TranscriptItem
 import com.hermes.mobile.domain.model.TurnPhase
+import com.hermes.mobile.ui.components.CodeBlock
+import com.hermes.mobile.ui.components.EmptyState
+import com.hermes.mobile.ui.components.MarkdownText
+import com.hermes.mobile.ui.components.toolIconFor
+import com.hermes.mobile.ui.theme.HermesMono
+import com.hermes.mobile.ui.theme.hermes
 
 /**
- * The Cockpit (spec §D.2) — the screen the app is really about.
- * Streaming transcript + tool timeline + live-turn controls + composer.
+ * The Cockpit — streaming transcript, tool timeline, live-turn controls and
+ * the composer.
+ *
+ * The scene this screen is designed for: the phone comes out of a pocket
+ * because a turn is running or blocked. So the two things that must be
+ * readable in one glance are *what the agent is doing right now* and *whether
+ * it needs an answer* — which is why the approval card is the loudest element
+ * on the surface and everything else is deliberately quiet.
  */
 @Composable
 fun CockpitScreen(
     vm: CockpitViewModel = hiltViewModel(),
+    modifier: Modifier = Modifier,
 ) {
     val items by vm.items.collectAsState()
     val phase by vm.turnPhase.collectAsState()
-    val title by vm.activeTitle.collectAsState()
-    val conn by vm.connState.collectAsState()
+    val commands by vm.commands.collectAsState()
     val listState = rememberLazyListState()
     val haptics = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
 
-    // Auto-follow the stream when already at the bottom.
+    // Auto-follow the stream only while the user is already at the bottom;
+    // yanking the viewport away from something they scrolled back to read is
+    // the fastest way to make a streaming transcript unusable.
+    val pinnedToBottom by remember {
+        derivedStateOf { !listState.canScrollForward }
+    }
     LaunchedEffect(items.size, (items.lastOrNull() as? TranscriptItem.AssistantMessage)?.text?.length) {
-        if (items.isNotEmpty() && !listState.canScrollForward) {
+        if (items.isNotEmpty() && pinnedToBottom) {
             listState.animateScrollToItem(items.size - 1)
         }
     }
     LaunchedEffect(phase) {
-        when (phase) {
-            TurnPhase.RUNNING -> haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-            TurnPhase.IDLE -> {}
+        if (phase == TurnPhase.RUNNING) {
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
         }
     }
 
-    Column(Modifier.fillMaxSize().imePadding()) {
-        // ---- status rail ----
-        StatusRail(title = title, conn = conn)
-
-        // ---- transcript ----
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            items(items, key = { it.key }) { item ->
-                when (item) {
-                    is TranscriptItem.UserMessage -> UserBubble(item.text)
-                    is TranscriptItem.AssistantMessage -> AssistantBlock(item)
-                    is TranscriptItem.ThinkingBlock -> ThinkingRow(item)
-                    is TranscriptItem.ToolCallItem -> ToolRow(item)
-                    is TranscriptItem.ApprovalCard -> ApprovalRow(
-                        item,
-                        onRespond = { choice -> vm.respondApproval(item, choice) },
+    Box(modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().imePadding()) {
+            if (items.isEmpty()) {
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    EmptyState(
+                        icon = Icons.Outlined.Forum,
+                        title = "Nothing here yet",
+                        hint = "Send a prompt, or type / to run one of your PC's " +
+                            "slash commands. Anything you start here keeps running " +
+                            "on the desktop.",
                     )
-                    is TranscriptItem.StatusLine -> Text(
-                        item.text,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                }
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(items, key = { it.key }) { item ->
+                        when (item) {
+                            is TranscriptItem.UserMessage -> UserBubble(item.text)
+                            is TranscriptItem.AssistantMessage -> AssistantBlock(item)
+                            is TranscriptItem.ThinkingBlock -> ThinkingRow(item)
+                            is TranscriptItem.ToolCallItem -> ToolRow(item)
+                            is TranscriptItem.CommandOutput -> CommandOutputRow(item)
+                            is TranscriptItem.ApprovalCard -> ApprovalRow(
+                                item,
+                                onRespond = { choice, remember ->
+                                    vm.respondApproval(item, choice, remember)
+                                },
+                            )
+                            is TranscriptItem.StatusLine -> StatusRow(item.text)
+                        }
+                    }
+                    if (phase == TurnPhase.RUNNING && items.none {
+                            (it as? TranscriptItem.AssistantMessage)?.streaming == true
+                        }
+                    ) {
+                        item { WorkingRow() }
+                    }
                 }
             }
-            if (phase == TurnPhase.RUNNING && items.none {
-                    (it as? TranscriptItem.AssistantMessage)?.streaming == true
-                }
+
+            AnimatedVisibility(
+                visible = phase == TurnPhase.RUNNING,
+                enter = expandVertically(tween(180)) + fadeIn(tween(180)),
+                exit = shrinkVertically(tween(140)) + fadeOut(tween(140)),
             ) {
-                item { ThinkingPlaceholder() }
+                LiveTurnBar(onInterrupt = vm::interrupt, onSteer = vm::steer)
             }
-        }
 
-        // ---- live-turn controls (only while running) ----
-        AnimatedVisibility(phase == TurnPhase.RUNNING) {
-            LiveTurnBar(onInterrupt = { vm.interrupt() }, onSteer = { vm.steer(it) })
-        }
-
-        // ---- composer ----
-        Composer(onSend = { vm.send(it) })
-    }
-}
-
-@Composable
-private fun StatusRail(title: String, conn: ConnState) {
-    Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            val (dotColor, label) = when (conn) {
-                is ConnState.Connected -> MaterialTheme.colorScheme.tertiary to conn.profile.label
-                is ConnState.Reconnecting -> MaterialTheme.colorScheme.secondary to "reconnecting…"
-                else -> MaterialTheme.colorScheme.error to "offline"
-            }
-            Surface(color = dotColor, shape = CircleShape, modifier = Modifier.size(8.dp)) {}
-            Text(label, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("·", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(
-                title,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+            Composer(
+                commands = commands,
+                onSend = vm::send,
+                onSlash = vm::runSlashCommand,
+                onOpenCommands = vm::loadCommands,
             )
         }
+
+        // Jump-to-latest, shown only when the user has scrolled away from it.
+        AnimatedVisibility(
+            visible = items.isNotEmpty() && !pinnedToBottom,
+            enter = fadeIn(tween(150)),
+            exit = fadeOut(tween(150)),
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 96.dp),
+        ) {
+            FloatingActionButton(
+                onClick = { scope.launch { listState.animateScrollToItem(items.size - 1) } },
+                modifier = Modifier.size(44.dp).semantics {
+                    contentDescription = "Scroll to the newest message"
+                },
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+            ) {
+                Icon(Icons.Outlined.ArrowDownward, contentDescription = null, Modifier.size(20.dp))
+            }
+        }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Transcript rows
+// ---------------------------------------------------------------------------
 
 @Composable
 private fun UserBubble(text: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
         Surface(
             color = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
             shape = RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp),
-            modifier = Modifier.widthIn(max = 300.dp),
+            modifier = Modifier.widthIn(max = 320.dp),
         ) {
-            Text(text, Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text,
+                Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                style = MaterialTheme.typography.bodyMedium,
+            )
         }
     }
 }
 
+/**
+ * The agent's own words. Rendered as Markdown, because that is what it writes:
+ * a fenced command and the sentence introducing it used to look identical.
+ */
 @Composable
 private fun AssistantBlock(item: TranscriptItem.AssistantMessage) {
-    Column {
-        Text(
-            "Hermes" + (item.usageContextPercent?.let { " · $it% ctx" } ?: ""),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.primary,
-        )
-        Text(item.text, style = MaterialTheme.typography.bodyMedium)
+    val clipboard = LocalClipboardManager.current
+    Column(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Hermes",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            item.usageContextPercent?.let {
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "$it% context",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            if (!item.streaming && item.text.isNotBlank()) {
+                IconButton(
+                    onClick = { clipboard.setText(AnnotatedString(item.text)) },
+                    modifier = Modifier.size(32.dp).semantics {
+                        contentDescription = "Copy this reply"
+                    },
+                ) {
+                    Icon(
+                        Icons.Outlined.ContentCopy,
+                        contentDescription = null,
+                        Modifier.size(15.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        MarkdownText(item.text, Modifier.padding(top = 2.dp))
         if (item.streaming) {
-            CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
+            Caret()
         }
     }
+}
+
+/** A blinking block cursor while text streams — cheaper to read than a spinner. */
+@Composable
+private fun Caret() {
+    val blink = rememberInfiniteTransition(label = "caret")
+    val alpha by blink.animateFloat(
+        initialValue = 0.15f,
+        targetValue = 0.85f,
+        animationSpec = infiniteRepeatable(tween(520), RepeatMode.Reverse),
+        label = "caret-alpha",
+    )
+    Box(
+        Modifier
+            .padding(top = 3.dp)
+            .size(width = 7.dp, height = 14.dp)
+            .background(
+                MaterialTheme.colorScheme.primary.copy(alpha = alpha),
+                RoundedCornerShape(1.dp),
+            ),
+    )
 }
 
 @Composable
 private fun ThinkingRow(item: TranscriptItem.ThinkingBlock) {
     var expanded by remember { mutableStateOf(false) }
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(10.dp),
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = 40.dp)
             .clickable { expanded = !expanded }
-            .semantics { contentDescription = "Thinking block, tap to expand" },
+            .semantics {
+                contentDescription =
+                    if (expanded) "Reasoning, expanded" else "Reasoning, tap to expand"
+            },
     ) {
-        Column(Modifier.padding(8.dp)) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Outlined.Psychology,
+                    contentDescription = null,
+                    Modifier.size(15.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(8.dp))
                 Text(
-                    if (item.live) "thinking…" else "thinking",
-                    style = MaterialTheme.typography.labelSmall,
+                    if (item.live) "reasoning…" else "reasoning",
+                    style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.weight(1f))
                 Icon(
-                    if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                    contentDescription = if (expanded) "collapse" else "expand",
-                    modifier = Modifier.size(14.dp),
+                    if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                    contentDescription = null,
+                    Modifier.size(16.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (expanded) {
+            AnimatedVisibility(expanded) {
                 Text(
                     item.text,
                     style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = HermesMono,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp),
                 )
             }
         }
@@ -224,93 +360,83 @@ private fun ThinkingRow(item: TranscriptItem.ThinkingBlock) {
 @Composable
 private fun ToolRow(item: TranscriptItem.ToolCallItem) {
     var expanded by remember { mutableStateOf(false) }
+    val semantics = MaterialTheme.hermes
+    val hasDetail = item.args != null || item.result != null
+
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(10.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { expanded = !expanded }
-            .semantics { contentDescription = "Tool call ${item.name}, tap for details" },
+            .heightIn(min = 44.dp)
+            .then(if (hasDetail) Modifier.clickable { expanded = !expanded } else Modifier)
+            .semantics { contentDescription = "Tool ${item.name}" },
     ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("⚙", style = MaterialTheme.typography.bodySmall)
-                Spacer(Modifier.size(6.dp))
-                Text(item.name, style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace)
-                Spacer(Modifier.size(8.dp))
-                item.context?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall,
+                Icon(
+                    toolIconFor(item.name),
+                    contentDescription = null,
+                    Modifier.size(15.dp),
+                    tint = if (item.running) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(9.dp))
+                Text(
+                    item.name,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontFamily = HermesMono,
+                )
+                item.context?.takeIf { it.isNotBlank() }?.let {
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f))
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
                 } ?: Spacer(Modifier.weight(1f))
-                Spacer(Modifier.size(8.dp))
+                Spacer(Modifier.width(8.dp))
                 if (item.running) {
-                    CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
+                    CircularProgressIndicator(
+                        Modifier.size(13.dp),
+                        strokeWidth = 1.5.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
                 } else {
                     Text(
-                        item.durationS?.let { "%.0fms ✓".format(it * 1000) } ?: "✓",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.tertiary,
+                        item.durationS?.let { formatDuration(it) } ?: "done",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = semantics.success,
+                    )
+                }
+                if (hasDetail) {
+                    Icon(
+                        if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                        contentDescription = null,
+                        Modifier.padding(start = 4.dp).size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
             item.approvalNote?.let {
-                Text(it, style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.secondary)
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
             }
-            if (expanded) {
-                item.args?.let {
-                    Spacer(Modifier.height(4.dp))
-                    Text("args: $it", style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace)
-                }
-                item.result?.let {
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        "result: ${it.take(800)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ApprovalRow(card: TranscriptItem.ApprovalCard, onRespond: (String) -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.errorContainer,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Approval needed", style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onErrorContainer)
-            card.description?.let {
-                Text(it, style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onErrorContainer)
-            }
-            card.command?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onErrorContainer)
-            }
-            if (card.resolved != null) {
-                Text("Answered: ${card.resolved}", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onErrorContainer)
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    card.choices.forEach { choice ->
-                        TextButton(
-                            onClick = { onRespond(choice) },
-                            modifier = Modifier
-                                .heightIn(min = 48.dp)
-                                .semantics { contentDescription = "Approval choice $choice" },
-                        ) { Text(choice.replaceFirstChar { it.uppercase() }) }
+            AnimatedVisibility(expanded && hasDetail) {
+                Column(
+                    Modifier.padding(top = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    item.args?.takeIf { it.isNotBlank() }?.let { CodeBlock("arguments", it) }
+                    item.result?.takeIf { it.isNotBlank() }?.let {
+                        CodeBlock("result", it.take(4000))
                     }
                 }
             }
@@ -319,99 +445,318 @@ private fun ApprovalRow(card: TranscriptItem.ApprovalCard, onRespond: (String) -
 }
 
 @Composable
-private fun ThinkingPlaceholder() {
-    Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
-        Spacer(Modifier.size(8.dp))
-        Text("Hermes is working…", style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun CommandOutputRow(item: TranscriptItem.CommandOutput) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Outlined.Terminal,
+                contentDescription = null,
+                Modifier.size(14.dp),
+                tint = MaterialTheme.colorScheme.secondary,
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                item.command,
+                style = MaterialTheme.typography.labelMedium,
+                fontFamily = HermesMono,
+                color = MaterialTheme.colorScheme.secondary,
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        CodeBlock(null, item.output.ifBlank { "(no output)" })
     }
 }
+
+@Composable
+private fun StatusRow(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(vertical = 2.dp),
+    )
+}
+
+/**
+ * The approval card — the reason this app exists on a phone.
+ *
+ * It is amber, not red: a routine "may I run this?" is a decision, not a
+ * failure, and spending error red on the common case would make the colour
+ * meaningless when something actually breaks. Every control clears 48dp,
+ * because this gets tapped one-handed, walking.
+ */
+@Composable
+private fun ApprovalRow(card: TranscriptItem.ApprovalCard, onRespond: (String, Boolean) -> Unit) {
+    val semantics = MaterialTheme.hermes
+    val resolved = card.resolved != null
+    var alsoRemember by remember { mutableStateOf(false) }
+
+    Surface(
+        color = if (resolved) MaterialTheme.colorScheme.surfaceContainer
+        else semantics.warningContainer,
+        contentColor = if (resolved) MaterialTheme.colorScheme.onSurfaceVariant
+        else semantics.onWarningContainer,
+        shape = RoundedCornerShape(14.dp),
+        shadowElevation = if (resolved) 0.dp else 6.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Bolt, contentDescription = null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (resolved) "Answered — ${card.resolved}" else "Waiting on you",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+            }
+
+            card.description?.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.bodyMedium)
+            }
+
+            card.command?.takeIf { it.isNotBlank() }?.let { command ->
+                val scroll = rememberScrollState()
+                Surface(
+                    color = semantics.code,
+                    contentColor = semantics.onCode,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        command,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = HermesMono,
+                        softWrap = false,
+                        modifier = Modifier
+                            .horizontalScroll(scroll)
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                    )
+                }
+            }
+
+            if (!resolved) {
+                if (card.allowSession || card.allowPermanent) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .clickable { alsoRemember = !alsoRemember }
+                            .semantics {
+                                contentDescription = "Also allow future identical commands"
+                            },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        androidx.compose.material3.Checkbox(
+                            checked = alsoRemember,
+                            onCheckedChange = { alsoRemember = it },
+                        )
+                        Text(
+                            if (card.allowPermanent) "Don't ask again for this command"
+                            else "Allow for the rest of this session",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                ApprovalChoices(card.choices, alsoRemember, onRespond)
+            }
+        }
+    }
+}
+
+/**
+ * Choices in server order, but with a deliberate visual hierarchy: the
+ * permissive answer is filled, the middle ground tonal, and refusal outlined.
+ * A row of identical text buttons made "deny" as easy to hit by accident as
+ * "allow".
+ */
+@Composable
+private fun ApprovalChoices(
+    choices: List<String>,
+    alsoRemember: Boolean,
+    onRespond: (String, Boolean) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        choices.forEach { choice ->
+            val label = choice.replaceFirstChar { it.uppercase() }
+            val modifier = Modifier
+                .weight(1f)
+                .heightIn(min = 48.dp)
+                .semantics { contentDescription = "Approval: $label" }
+            when {
+                choice.equals("deny", true) || choice.equals("no", true) ->
+                    OutlinedButton(
+                        onClick = { onRespond(choice, false) },
+                        modifier = modifier,
+                    ) { Text(label, maxLines = 1) }
+
+                choice.equals("once", true) || choice.equals("yes", true) ->
+                    Button(
+                        onClick = { onRespond(choice, alsoRemember) },
+                        modifier = modifier,
+                    ) { Text(label, maxLines = 1) }
+
+                else -> FilledTonalButton(
+                    onClick = { onRespond(choice, alsoRemember) },
+                    modifier = modifier,
+                ) { Text(label, maxLines = 1) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkingRow() {
+    Row(Modifier.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
+        Spacer(Modifier.width(10.dp))
+        Text(
+            "Hermes is working…",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Live turn + composer
+// ---------------------------------------------------------------------------
 
 @Composable
 private fun LiveTurnBar(onInterrupt: () -> Unit, onSteer: (String) -> Unit) {
     var steerMode by remember { mutableStateOf(false) }
     var steerText by remember { mutableStateOf("") }
-    Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
-            if (steerMode) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = steerText,
-                        onValueChange = { steerText = it },
-                        placeholder = { Text("Steer this turn…") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(
-                        onClick = { if (steerText.isNotBlank()) { onSteer(steerText); steerText = ""; steerMode = false } },
-                        modifier = Modifier
-                            .heightIn(min = 48.dp)
-                            .semantics { contentDescription = "Send steer" },
-                    ) { Text("Steer") }
+
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
+        if (steerMode) {
+            Row(
+                Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = steerText,
+                    onValueChange = { steerText = it },
+                    placeholder = { Text("Add a note to this turn…") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                TextButton(
+                    onClick = {
+                        if (steerText.isNotBlank()) {
+                            onSteer(steerText)
+                            steerText = ""
+                            steerMode = false
+                        }
+                    },
+                    modifier = Modifier.heightIn(min = 48.dp).semantics {
+                        contentDescription = "Send the steer"
+                    },
+                ) { Text("Send") }
+            }
+        } else {
+            Row(
+                Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(
+                    onClick = onInterrupt,
+                    modifier = Modifier.heightIn(min = 48.dp).semantics {
+                        contentDescription = "Interrupt this turn"
+                    },
+                ) {
+                    Icon(Icons.Outlined.Stop, contentDescription = null, Modifier.size(17.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Interrupt", color = MaterialTheme.colorScheme.error)
                 }
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    TextButton(
-                        onClick = onInterrupt,
-                        modifier = Modifier
-                            .heightIn(min = 48.dp)
-                            .semantics { contentDescription = "Interrupt this turn" },
-                    ) { Text("⏸ Interrupt", color = MaterialTheme.colorScheme.error) }
-                    TextButton(
-                        onClick = { steerMode = true },
-                        modifier = Modifier
-                            .heightIn(min = 48.dp)
-                            .semantics { contentDescription = "Steer this turn" },
-                    ) { Text("↪ Steer") }
+                TextButton(
+                    onClick = { steerMode = true },
+                    modifier = Modifier.heightIn(min = 48.dp).semantics {
+                        contentDescription = "Steer this turn"
+                    },
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                        contentDescription = null,
+                        Modifier.size(17.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("Steer")
                 }
             }
         }
     }
 }
 
-@OptIn(com.google.accompanist.permissions.ExperimentalPermissionsApi::class)
+@OptIn(ExperimentalPermissionsApi::class)
 @Composable
-private fun Composer(onSend: (String) -> Unit) {
+private fun Composer(
+    commands: List<SlashCommand>,
+    onSend: (String) -> Unit,
+    onSlash: (String) -> Unit,
+    onOpenCommands: () -> Unit,
+) {
     var text by remember { mutableStateOf("") }
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     val voice = remember { com.hermes.mobile.core.voice.VoiceInputController(context) }
     val listening by voice.listening.collectAsState()
     val partial by voice.partial.collectAsState()
 
-    androidx.compose.runtime.DisposableEffect(Unit) {
+    DisposableEffect(Unit) {
         voice.onFinalResult = { spoken -> text = spoken }
         onDispose { voice.destroy() }
     }
 
-    val micPermission = com.google.accompanist.permissions.rememberPermissionState(
-        android.Manifest.permission.RECORD_AUDIO,
-    )
+    val micPermission = rememberPermissionState(android.Manifest.permission.RECORD_AUDIO)
 
-    Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
-        Column {
+    // Typing "/" opens the command list, filtered as you keep typing — the same
+    // affordance the desktop TUI has, which is where these commands live.
+    val slashQuery = text.takeIf { it.startsWith("/") }
+    val matches = remember(slashQuery, commands) {
+        slashQuery?.let { q ->
+            commands.filter { it.name.startsWith(q, ignoreCase = true) }.take(6)
+        }.orEmpty()
+    }
+    LaunchedEffect(slashQuery != null) {
+        if (slashQuery != null) onOpenCommands()
+    }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.navigationBarsPadding()) {
+            if (matches.isNotEmpty()) {
+                CommandSuggestions(matches) { picked ->
+                    text = if (picked.name.endsWith(" ")) picked.name else picked.name + " "
+                }
+            }
             if (listening && partial.isNotBlank()) {
                 Text(
                     partial,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
             Row(
-                Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.Bottom,
             ) {
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
-                    placeholder = { Text("Message Hermes…") },
-                    maxLines = 4,
+                    placeholder = { Text("Message Hermes, or / for commands") },
+                    maxLines = 5,
+                    shape = RoundedCornerShape(22.dp),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
                     modifier = Modifier
                         .weight(1f)
                         .semantics { contentDescription = "Message input" },
                 )
-                Spacer(Modifier.size(8.dp))
+                Spacer(Modifier.width(6.dp))
                 IconButton(
                     onClick = {
                         if (micPermission.status.isGranted) {
@@ -420,21 +765,76 @@ private fun Composer(onSend: (String) -> Unit) {
                             micPermission.launchPermissionRequest()
                         }
                     },
-                    modifier = Modifier
-                        .size(48.dp)
-                        .semantics { contentDescription = if (listening) "Stop voice input" else "Hold to talk" },
+                    modifier = Modifier.size(48.dp).semantics {
+                        contentDescription = if (listening) "Stop dictation" else "Dictate a prompt"
+                    },
                 ) {
-                    Text(if (listening) "⏹" else "🎙")
+                    Icon(
+                        if (listening) Icons.Outlined.Stop else Icons.Outlined.Mic,
+                        contentDescription = null,
+                        tint = if (listening) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                IconButton(
-                    onClick = { if (text.isNotBlank()) { onSend(text); text = "" } },
-                    modifier = Modifier
-                        .size(48.dp)
-                        .semantics { contentDescription = "Send message" },
+                val canSend = text.isNotBlank()
+                FloatingActionButton(
+                    onClick = {
+                        if (!canSend) return@FloatingActionButton
+                        val payload = text
+                        text = ""
+                        if (payload.startsWith("/")) onSlash(payload) else onSend(payload)
+                    },
+                    modifier = Modifier.size(48.dp).semantics {
+                        contentDescription = "Send to Hermes"
+                    },
+                    containerColor = if (canSend) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.surfaceContainerHighest,
+                    contentColor = if (canSend) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    elevation = androidx.compose.material3.FloatingActionButtonDefaults
+                        .elevation(0.dp, 0.dp, 0.dp, 0.dp),
                 ) {
-                    Icon(Icons.Default.Send, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, Modifier.size(20.dp))
                 }
             }
         }
     }
+}
+
+@Composable
+private fun CommandSuggestions(matches: List<SlashCommand>, onPick: (SlashCommand) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+        matches.forEach { command ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .clickable { onPick(command) }
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .semantics { contentDescription = "Command ${command.name}" },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    command.name,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontFamily = HermesMono,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    command.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+private fun formatDuration(seconds: Double): String = when {
+    seconds < 1 -> "${(seconds * 1000).toInt()}ms"
+    seconds < 60 -> String.format("%.1fs", seconds)
+    else -> "${(seconds / 60).toInt()}m ${(seconds % 60).toInt()}s"
 }

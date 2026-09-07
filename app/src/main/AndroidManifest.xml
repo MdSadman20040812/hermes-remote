@@ -4,6 +4,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- LAN discovery needs to know the phone is on Wi-Fi and which /24 it holds -->
+
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
     <!-- Camera: QR pairing only -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -24,21 +28,28 @@
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
+        android:enableOnBackInvokedCallback="true"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.HermesMobile"
+
         android:usesCleartextTraffic="true">
 
         <!--
-          usesCleartextTraffic=true is deliberate: the dashboard serves plain
-          HTTP/WS on the tailnet address, and Tailscale (WireGuard) provides
-          the encryption. The app only ever talks to user-paired hosts.
+          usesCleartextTraffic=true is deliberate and narrow: the dashboard
+          serves plain HTTP/WS on a private LAN address, and the app only ever
+          talks to a host the user paired by scanning a QR on that host's own
+          screen. Cleartext to a NON-private address is refused in code by
+          PrivateHosts.requirePrivate (Android's network-security-config takes
+          hostnames, not CIDR, so the restriction cannot be expressed there).
         -->
 
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
+            android:theme="@style/Theme.HermesMobile.Splash"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density|fontScale"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -88,7 +99,7 @@
             android:name=".service.QuickTileService"
             android:exported="true"
             android:label="Hermes Remote"
-            android:icon="@mipmap/ic_launcher"
+            android:icon="@drawable/ic_stat_hermes"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />

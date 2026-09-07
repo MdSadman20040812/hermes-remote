@@ -190,3 +190,53 @@ proven; they slot into the existing Ops/Cockpit pattern when wanted.
 
 **Verified:** compile ✓ · test 21/21 ✓ · lint 0 errors ✓ · assembleDebug ✓.
 **Final APK: 41,862,772 B = 39.9 MB (v1 was 70.8 MB, −44%).**
+
+---
+
+## 2026-09-07 — LAN-first transport, robustness pass, FIRST ON-DEVICE VERIFICATION
+
+**Transport decision:** Tailscale demoted from requirement to option
+(`hermes-remote.ps1 -UseTailscale`). The phone and PC share a home router, so
+the router already is the private network; a tailnet added a second identity
+system that can be "not logged in" for reachability the LAN already gives.
+
+**The bug that made the app unusable:** `ServerStatus.gatewayPlatforms` was
+typed `List<String>` while the server sends `{"telegram":{...}}`. That threw a
+JsonDecodingException out of EVERY `/api/status` decode — including the one in
+`connectTo` — so a healthy dashboard reported "Can't reach your PC". A wrong
+type on a field nothing renders. Now `JsonElement` + `platformNames`, pinned by
+`ServerStatusTest` against a literal 0.21.0 capture. Lesson recorded: never
+guess a wire shape; capture it.
+
+**PC side was equally broken, invisibly:** the Wi-Fi was classified Public
+(Windows drops inbound wholesale, before any rule) and nothing allowed inbound
+9119. Both failures look exactly like "app can't find PC" from the phone. New
+`pc/setup-lan.ps1` (elevated, one-time) fixes both, scoped to Private/Domain +
+LocalSubnet so the opening does not follow the laptop to a cafe.
+
+**New:** `NetworkMonitor` (link transitions drive reconnects instead of a
+timer), `LanDiscovery` (/24 sweep for `/api/status`, self-heals DHCP drift),
+`PrivateHosts` (cleartext credential guard, CIDR — unexpressible in
+network-security-config, so it lives in code).
+
+**Fixed under test on the phone:**
+- Failed connect was terminal — the retry loop only ran off a socket that had
+  already opened, so a Wi-Fi bounce left "Couldn't connect" beside a discovery
+  card listing that same PC. All retryable failures now go through
+  `failAndRetry`.
+- Link-change connected on the same tick as the WIFI callback, before DHCP
+  settled, and lost the race; now it resets backoff and hands off to the loop.
+- Half-open socket looked connected and silent forever → 25 s app-level ping →
+  `RpcChannel.markDegraded`.
+- The reconnect loop's own `connectTo` cancelled the coroutine it ran in.
+- `PreviewView` defaults to SurfaceView, a hardware layer compositing ABOVE
+  Compose; it sliced the discovery card in half on device (invisible in any
+  emulator-free review). `ImplementationMode.COMPATIBLE` + one pairing mode at
+  a time.
+
+**Verified on Galaxy A07 (R87YA00YSAD), not just compiled:**
+discovery 2.6 s · gated handshake to `101 Switching Protocols` · prompt round
+trip returning `PHONE_LINK_OK` · cold-start auto-reconnect · Wi-Fi off/on
+self-heal · `?ticket=•••` redaction holding in logcat.
+
+**Tests:** 57 passing (was 51 pre-session, 21 at Phase 6).

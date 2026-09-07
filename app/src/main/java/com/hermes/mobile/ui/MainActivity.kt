@@ -6,19 +6,22 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import com.hermes.mobile.core.notify.HermesNotifier
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
 /**
  * Main entry point for Hermes Remote.
  * The Activity stays thin; all routing lives in [HermesApp].
- * Handles hermes://session/<id> deep links (Telegram doorbell, notifications).
+ * Handles hermes://session/<id> deep links (doorbell, notifications) and the
+ * "Send to Hermes" share target.
  */
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
     @Inject lateinit var deepLinkBus: DeepLinkBus
     @Inject lateinit var shareBus: ShareBus
+    @Inject lateinit var notifier: HermesNotifier
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -29,6 +32,19 @@ class MainActivity : ComponentActivity() {
         setContent {
             HermesApp()
         }
+    }
+
+    // Turn-complete notifications are suppressed while the app is on screen —
+    // announcing something the user is already watching is how a channel that
+    // matters gets muted.
+    override fun onStart() {
+        super.onStart()
+        notifier.appInForeground = true
+    }
+
+    override fun onStop() {
+        notifier.appInForeground = false
+        super.onStop()
     }
 
     override fun onNewIntent(intent: Intent) {

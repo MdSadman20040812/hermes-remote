@@ -1,29 +1,49 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Widget host requires RemoteViews; this is the one layout XML in the app. -->
+<!--
+    Widget host requires RemoteViews, so this is the one layout XML in the app.
+    It carries the same mark, surface and radius the Compose UI uses, because a
+    widget that looks like a different product is worse than no widget.
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:gravity="center"
-    android:padding="12dp"
-    android:background="#0B0B0F">
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:padding="14dp"
+    android:background="@drawable/widget_bg">
 
-    <TextView
-        android:id="@+id/widget_title"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Hermes Remote"
-        android:textColor="#FFFFFF"
-        android:textSize="14sp"
-        android:textStyle="bold" />
+    <ImageView
+        android:id="@+id/widget_mark"
+        android:layout_width="28dp"
+        android:layout_height="28dp"
+        android:contentDescription="@string/app_name"
+        android:src="@drawable/ic_stat_hermes"
+        android:tint="@color/hermes_primary_dark" />
 
-    <TextView
-        android:id="@+id/widget_hint"
-        android:layout_width="wrap_content"
+    <LinearLayout
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:text="Tap to open the cockpit"
-        android:textColor="#B0B0B0"
-        android:textSize="11sp" />
+        android:layout_weight="1"
+        android:layout_marginStart="12dp"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/widget_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/app_name"
+            android:textColor="@color/hermes_on_surface"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_hint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="@string/widget_hint"
+            android:textColor="@color/hermes_on_surface_variant"
+            android:textSize="11sp" />
+    </LinearLayout>
 </LinearLayout>

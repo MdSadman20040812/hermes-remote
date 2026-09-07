@@ -1,26 +1,32 @@
 package com.hermes.mobile.ui.terminal
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -31,141 +37,189 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.hermes.mobile.core.terminal.PtyState
+import com.hermes.mobile.ui.components.PulseDot
+import com.hermes.mobile.ui.theme.HermesMono
+import com.hermes.mobile.ui.theme.HermesTerminalStyle
+import com.hermes.mobile.ui.theme.hermes
 
 /**
- * Terminal tab — the full Hermes TUI over /api/pty (Phase 0: binary frames,
- * works on Windows via ConPTY). Plain-text scrollback + mobile key row.
+ * The full desktop TUI, over /api/pty.
+ *
+ * Scrollback is a real terminal surface — its own near-black material, no
+ * wrapping, and a monospace face that here is doing its actual job rather than
+ * signalling "technical". The key row exists because Android's IME has no Esc,
+ * no Tab, no Ctrl and no arrows, and every one of those is load-bearing in a
+ * TUI.
  */
 @Composable
-fun TerminalScreen(
-    vm: TerminalViewModel = hiltViewModel(),
-) {
+fun TerminalScreen(vm: TerminalViewModel = hiltViewModel()) {
     val scrollback by vm.scrollback.collectAsState()
     val state by vm.state.collectAsState()
-    val scrollState = rememberScrollState()
+    val vScroll = rememberScrollState()
+    val hScroll = rememberScrollState()
+    val clipboard = LocalClipboardManager.current
     var input by remember { mutableStateOf("") }
+    val semantics = MaterialTheme.hermes
 
     LaunchedEffect(Unit) { vm.connect() }
     DisposableEffect(Unit) { onDispose { vm.disconnect() } }
-    LaunchedEffect(scrollback) {
-        scrollState.animateScrollTo(scrollableMax(scrollState))
-    }
+    LaunchedEffect(scrollback) { vScroll.animateScrollTo(vScroll.maxValue) }
 
     Column(Modifier.fillMaxSize().imePadding()) {
-        // status line
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                when (state) {
-                    PtyState.OPEN -> "● connected"
-                    PtyState.CONNECTING -> "◌ connecting…"
-                    PtyState.RECONNECTING -> "◌ reconnecting…"
-                    PtyState.ENDED -> "○ session ended"
-                    PtyState.CLOSED -> "○ closed"
-                },
-                style = MaterialTheme.typography.labelSmall,
+            PulseDot(
                 color = when (state) {
-                    PtyState.OPEN -> MaterialTheme.colorScheme.tertiary
-                    PtyState.ENDED, PtyState.CLOSED -> MaterialTheme.colorScheme.onSurfaceVariant
+                    PtyState.OPEN -> semantics.online
+                    PtyState.ENDED, PtyState.CLOSED -> semantics.offline
                     else -> MaterialTheme.colorScheme.secondary
                 },
+                animating = state == PtyState.CONNECTING || state == PtyState.RECONNECTING,
             )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                when (state) {
+                    PtyState.OPEN -> "attached"
+                    PtyState.CONNECTING -> "attaching…"
+                    PtyState.RECONNECTING -> "reattaching…"
+                    PtyState.ENDED -> "session ended"
+                    PtyState.CLOSED -> "detached"
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(
+                onClick = { clipboard.setText(AnnotatedString(scrollback)) },
+                modifier = Modifier.semantics { contentDescription = "Copy all scrollback" },
+            ) {
+                Icon(Icons.Outlined.ContentCopy, contentDescription = null, Modifier.size(17.dp))
+            }
         }
 
-        // scrollback
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-            modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp),
-            shape = RoundedCornerShape(8.dp),
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp)
+                .background(semantics.code, RoundedCornerShape(10.dp)),
         ) {
             Text(
-                scrollback,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 11.sp,
-                lineHeight = 14.sp,
+                scrollback.ifBlank { "Waiting for the PTY…" },
+                style = HermesTerminalStyle,
+                color = semantics.onCode,
+                softWrap = false,
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(scrollState)
-                    .padding(8.dp)
+                    .verticalScroll(vScroll)
+                    .horizontalScroll(hScroll)
+                    .padding(10.dp)
                     .semantics { contentDescription = "Terminal output" },
             )
         }
 
-        // mobile key row (pty-mobile-input.ts key set: Esc Tab Ctrl arrows | ~ /)
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            KeyButton("Esc", "\u001B") { vm.sendInput("\u001B") }
-            KeyButton("Tab", "\t") { vm.sendInput("\t") }
-            KeyButton("←", "\u001B[D") { vm.sendInput("\u001B[D") }
-            KeyButton("↓", "\u001B[B") { vm.sendInput("\u001B[B") }
-            KeyButton("↑", "\u001B[A") { vm.sendInput("\u001B[A") }
-            KeyButton("→", "\u001B[C") { vm.sendInput("\u001B[C") }
-            KeyButton("Ctrl-C", "\u0003") { vm.sendInput("\u0003") }
-            KeyButton("Ctrl-D", "\u0004") { vm.sendInput("\u0004") }
-            KeyButton("|", "|") { vm.sendInput("|") }
-            KeyButton("~", "~") { vm.sendInput("~") }
-            KeyButton("/", "/") { vm.sendInput("/") }
-        }
-
-        // input row
-        Row(
-            Modifier.fillMaxWidth().padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = { new ->
-                    // Whole-value replacement from the IME → normalized resend.
-                    vm.noteImeReplacement()
-                    input = new
-                },
-                placeholder = { Text("type a command…") },
-                singleLine = true,
-                textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace),
-                modifier = Modifier
-                    .weight(1f)
-                    .semantics { contentDescription = "Terminal input" },
-            )
-            IconButton(
-                onClick = {
-                    if (input.isNotEmpty()) {
-                        vm.sendInput(input + "\r")
-                        input = ""
-                    }
-                },
-                modifier = Modifier
-                    .size(48.dp)
-                    .semantics { contentDescription = "Send to terminal" },
+        Column(Modifier.navigationBarsPadding()) {
+            KeyRow(vm)
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Default.Send, contentDescription = null)
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { new ->
+                        // Whole-value replacement from the IME → normalized resend.
+                        vm.noteImeReplacement()
+                        input = new
+                    },
+                    placeholder = { Text("type a command…") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontFamily = HermesMono),
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics { contentDescription = "Terminal input" },
+                )
+                Spacer(Modifier.width(6.dp))
+                IconButton(
+                    onClick = {
+                        if (input.isNotEmpty()) {
+                            vm.sendInput(input + "\r")
+                            input = ""
+                        }
+                    },
+                    modifier = Modifier.size(48.dp).semantics {
+                        contentDescription = "Send to terminal"
+                    },
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.Send,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
         }
     }
 }
 
+/**
+ * The keys Android's soft keyboard does not have. Ported from the web client's
+ * pty-mobile-input key set, in the order a hand reaches for them: escape and
+ * completion first, then navigation, then the interrupts.
+ */
 @Composable
-private fun KeyButton(label: String, send: String, onSend: (String) -> Unit) {
-    TextButton(
-        onClick = { onSend(send) },
-        modifier = Modifier.semantics { contentDescription = "Key $label" },
+private fun KeyRow(vm: TerminalViewModel) {
+    val keys = listOf(
+        "Esc" to "\u001B",
+        "Tab" to "\t",
+        "\u2191" to "\u001B[A",
+        "\u2193" to "\u001B[B",
+        "\u2190" to "\u001B[D",
+        "\u2192" to "\u001B[C",
+        "^C" to "\u0003",
+        "^D" to "\u0004",
+        "^Z" to "\u001A",
+        "|" to "|",
+        "~" to "~",
+        "/" to "/",
+    )
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text(label, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+        keys.forEach { (label, code) ->
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                onClick = { vm.sendInput(code) },
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .semantics { contentDescription = "Key $label" },
+            ) {
+                Box(
+                    Modifier.heightIn(min = 48.dp).padding(horizontal = 14.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontFamily = HermesMono,
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.width(4.dp))
     }
 }
-
-private fun scrollableMax(state: androidx.compose.foundation.ScrollState): Int =
-    state.maxValue.let { if (it == Int.MAX_VALUE) 0 else it }

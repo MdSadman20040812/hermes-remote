@@ -7,17 +7,26 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Computer
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
@@ -25,108 +34,140 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.hermes.mobile.core.connection.ConnState
+import com.hermes.mobile.core.connection.ConnectionProfile
+import com.hermes.mobile.ui.components.ConnectionPill
+import com.hermes.mobile.ui.components.MetaChip
+import com.hermes.mobile.ui.components.NavRow
+import com.hermes.mobile.ui.components.SectionLabel
+import com.hermes.mobile.ui.theme.HermesMono
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
- * Phase 1 home: proves the spine end-to-end — live /api/status from the PC
- * plus the live socket state. The Cockpit replaces this in Phase 2.
+ * The paired machines, and everything about the one you are on.
+ *
+ * This is also the only place that unpairs a PC. That is deliberate: it wipes
+ * a credential out of the vault, so it belongs behind a confirmation on a
+ * screen you had to navigate to, not on a toolbar next to "new session".
  */
 @Composable
-fun HomeScreen(
-    vm: HomeViewModel = hiltViewModel(),
-) {
+fun ConnectionPanel(vm: HomeViewModel = hiltViewModel()) {
     val conn by vm.connState.collectAsState()
     val channel by vm.channelState.collectAsState()
+    val profiles by vm.profiles.collectAsState()
+    var pendingForget by remember { mutableStateOf<ConnectionProfile?>(null) }
 
     Column(
-        modifier = Modifier
+        Modifier
             .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp)
+            .padding(bottom = 32.dp),
     ) {
-        Text("Hermes Remote", style = MaterialTheme.typography.headlineMedium)
+        (conn as? ConnState.Connected)?.let { c ->
+            SectionLabel("Connected to")
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        ConnectionPill(conn, compact = true)
+                        Spacer(Modifier.width(10.dp))
+                        Text(c.profile.label, style = MaterialTheme.typography.titleMedium)
+                    }
+                    Fact("Address", c.profile.displayAddress)
+                    Fact("Transport", if (c.profile.secure) "https / wss" else "http / ws")
+                    Fact("Auth", c.profile.auth.name.lowercase())
+                    Fact("Socket", channel.toString().substringAfterLast('.').lowercase())
+                    c.status?.version?.let { Fact("Hermes", "v$it") }
+                    c.status?.gatewayState?.let { Fact("Gateway", it) }
+                    Fact("Active sessions", (c.status?.activeSessions ?: 0).toString())
+                }
+            }
+        }
 
-        when (val s = conn) {
-            is ConnState.Connected -> {
-                StatusCard(
-                    label = s.profile.label,
-                    address = "${s.profile.host}:${s.profile.port}",
-                    version = s.status?.version,
-                    gateway = s.status?.gatewayState,
-                    sessions = s.status?.activeSessions,
-                    overall = s.status?.overall,
+        SectionLabel("Paired PCs")
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            profiles.forEach { profile ->
+                val active = (conn as? ConnState.Connected)?.profile?.id == profile.id
+                NavRow(
+                    title = profile.label,
+                    subtitle = profile.displayAddress +
+                        (profile.lastSeenAt?.let { " · seen ${formatSeen(it)}" } ?: ""),
+                    icon = Icons.Outlined.Computer,
+                    trailing = { if (active) MetaChip("current") },
+                    onClick = if (active) null else ({ vm.switchTo(profile) }),
                 )
-                SocketRow(state = channel.toString().substringAfterLast('.'))
             }
-            is ConnState.Reconnecting -> Text(
-                "Reconnecting to ${s.profile.label} (attempt ${s.attempt})…",
-                color = MaterialTheme.colorScheme.tertiary,
+            if (profiles.isEmpty()) {
+                Text(
+                    "No PCs paired.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        SectionLabel("Danger zone")
+        (conn as? ConnState.Connected)?.profile?.let { profile ->
+            OutlinedButton(
+                onClick = { pendingForget = profile },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .semantics { contentDescription = "Unpair ${profile.label}" },
+            ) {
+                Text("Unpair ${profile.label}", color = MaterialTheme.colorScheme.error)
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Removes the saved credential from this phone. Nothing on the PC changes.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            else -> Text("Not connected", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-
-        Spacer(Modifier.weight(1f))
-
-        OutlinedButton(
-            onClick = { vm.disconnect() },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp)
-                .semantics { contentDescription = "Disconnect and unpair" },
-        ) { Text("Disconnect & forget this PC") }
-    }
-}
-
-@Composable
-private fun StatusCard(
-    label: String,
-    address: String,
-    version: String?,
-    gateway: String?,
-    sessions: Int?,
-    overall: String?,
-) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    color = MaterialTheme.colorScheme.tertiary,
-                    shape = CircleShape,
-                    modifier = Modifier.size(10.dp),
-                ) {}
-                Spacer(Modifier.size(8.dp))
-                Text(label, style = MaterialTheme.typography.titleMedium)
-            }
-            InfoRow("Address", address)
-            version?.let { InfoRow("Hermes", "v$it") }
-            gateway?.let { InfoRow("Gateway", it) }
-            sessions?.let { InfoRow("Active sessions", it.toString()) }
-            overall?.let { InfoRow("Health", it) }
         }
     }
-}
 
-@Composable
-private fun SocketRow(state: String) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text("Socket", style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(state, style = MaterialTheme.typography.bodySmall)
+    pendingForget?.let { profile ->
+        AlertDialog(
+            onDismissRequest = { pendingForget = null },
+            title = { Text("Unpair ${profile.label}?") },
+            text = {
+                Text(
+                    "The stored credential is deleted from this phone. You'll need the " +
+                        "pairing QR again to reconnect.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        vm.forget(profile)
+                        pendingForget = null
+                    },
+                ) { Text("Unpair", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingForget = null }) { Text("Cancel") }
+            },
+        )
     }
 }
 
 @Composable
-private fun InfoRow(key: String, value: String) {
+private fun Fact(key: String, value: String) {
     Row(Modifier.fillMaxWidth()) {
-        Text(key, Modifier.weight(1f),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, style = MaterialTheme.typography.bodyMedium)
+        Text(
+            key,
+            Modifier.weight(1f),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(value, style = MaterialTheme.typography.bodySmall, fontFamily = HermesMono)
     }
 }
+
+private fun formatSeen(millis: Long): String =
+    SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(millis))

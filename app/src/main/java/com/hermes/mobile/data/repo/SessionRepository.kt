@@ -2,30 +2,34 @@ package com.hermes.mobile.data.repo
 
 import com.hermes.mobile.core.connection.ConnectionManager
 import com.hermes.mobile.core.transport.HermesClient
-import com.hermes.mobile.data.local.MessageEntity
+import com.hermes.mobile.core.transport.rpcParamsOf
 import com.hermes.mobile.data.local.SessionDao
 import com.hermes.mobile.data.local.SessionEntity
 import com.hermes.mobile.domain.model.SessionSummary
+import com.hermes.mobile.domain.model.SessionUsage
 import kotlinx.coroutines.flow.first
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.doubleOrNull
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Session lifecycle against the live server, with Room as a read-through cache.
- * Cache is derived state — the server's state.db is authoritative (spec §C.6).
+ * Cache is derived state — the server's state.db is authoritative (spec §C.6),
+ * which is why every mutation here goes to the server first and the cache is
+ * only refreshed from a subsequent list.
  */
 @Singleton
 class SessionRepository @Inject constructor(
     private val connectionManager: ConnectionManager,
     private val sessionDao: SessionDao,
 ) {
-    val cachedSessions = sessionDao.observeAll()
+    /** Last-known list, available before the socket is up so the list opens instantly. */
+    val cachedSessions = sessionDao.observeAll().map { rows ->
+        rows.map {
+            SessionSummary(it.id, it.title, it.preview, it.startedAt, it.messageCount, it.source)
+        }
+    }
 
     private suspend fun client(): HermesClient =
         connectionManager.clientFlow.first { it != null }!!
@@ -33,16 +37,14 @@ class SessionRepository @Inject constructor(
     /** session.list → typed summaries; refreshes the Room cache. */
     suspend fun listSessions(): List<SessionSummary> {
         val result = client().sessionList() ?: return emptyList()
-        val sessions = result.jsonObject["sessions"]?.jsonArray ?: return emptyList()
-        val parsed = sessions.mapNotNull { el ->
-            val o = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
+        val parsed = result.obj().objects("sessions").mapNotNull { o ->
             SessionSummary(
-                id = o["id"]?.jsonPrimitive?.content ?: return@mapNotNull null,
-                title = o["title"]?.jsonPrimitive?.content ?: "",
-                preview = o["preview"]?.jsonPrimitive?.content ?: "",
-                startedAt = o["started_at"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
-                messageCount = o["message_count"]?.jsonPrimitive?.intOrNull ?: 0,
-                source = o["source"]?.jsonPrimitive?.content ?: "",
+                id = o.str("id") ?: return@mapNotNull null,
+                title = o.str("title").orEmpty(),
+                preview = o.str("preview").orEmpty(),
+                startedAt = o.dbl("started_at") ?: 0.0,
+                messageCount = o.int("message_count") ?: 0,
+                source = o.str("source").orEmpty(),
             )
         }
         sessionDao.upsertAll(parsed.map {
@@ -54,22 +56,71 @@ class SessionRepository @Inject constructor(
     /** session.create → the LIVE handle (not the stored id — Phase 0 finding). */
     suspend fun createSession(title: String = ""): String {
         val result = client().sessionCreate(title)
-        val sid = result?.jsonObject?.get("session_id")?.jsonPrimitive?.content
-        return sid ?: error("session.create returned no session_id")
+        return result.obj().str("session_id")
+            ?: error("session.create returned no session_id")
     }
 
     /** session.resume (stored id) → live handle. Server returns the new handle. */
     suspend fun resumeSession(storedId: String): String {
         val result = client().rpc.call(
             "session.resume",
-            com.hermes.mobile.core.transport.rpcParamsOf(
+            rpcParamsOf(
                 "session_id" to storedId,
                 "omit_messages" to true, // we hydrate via session.history ourselves
             ),
         )
-        val obj = result?.jsonObject
-        return obj?.get("session_id")?.jsonPrimitive?.content
-            ?: obj?.get("info")?.jsonObject?.get("session_id")?.jsonPrimitive?.content
+        val o = result.obj()
+        return o.str("session_id")
+            ?: o.objAt("info").str("session_id")
             ?: storedId // fall back: some paths echo the target
+    }
+
+    // ------------------------------------------------------------ mutations
+
+    /** Rename. The server persists to state.db, so the desktop sees it too. */
+    suspend fun rename(sessionId: String, title: String) {
+        client().rpc.call("session.title", rpcParamsOf("session_id" to sessionId, "title" to title))
+    }
+
+    /**
+     * Delete a STORED session. The server refuses to delete one that is live in
+     * the gateway, so the caller must not pass the currently-open handle.
+     */
+    suspend fun delete(storedId: String) {
+        client().rpc.call("session.delete", rpcParamsOf("session_id" to storedId))
+    }
+
+    /** Fork the open session; returns the new live handle. */
+    suspend fun branch(sessionId: String): String? =
+        client().rpc.call("session.branch", rpcParamsOf("session_id" to sessionId))
+            .obj().str("session_id")
+
+    /** Summarise history to reclaim context. Long-running — allow a wide timeout. */
+    suspend fun compress(sessionId: String, focusTopic: String = "") {
+        client().rpc.call(
+            "session.compress",
+            rpcParamsOf("session_id" to sessionId, "focus_topic" to focusTopic.ifBlank { null }),
+            timeout = 180.seconds,
+        )
+    }
+
+    /** Drop the last exchange. Refused while a turn is running — surface that. */
+    suspend fun undo(sessionId: String): Int =
+        client().rpc.call("session.undo", rpcParamsOf("session_id" to sessionId))
+            .obj().int("removed") ?: 0
+
+    suspend fun usage(sessionId: String): SessionUsage {
+        val o = client().rpc.call("session.usage", rpcParamsOf("session_id" to sessionId)).obj()
+        return SessionUsage(
+            model = o.str("model"),
+            calls = o.int("calls") ?: 0,
+            input = o.long("input") ?: 0,
+            output = o.long("output") ?: 0,
+            total = o.long("total") ?: 0,
+            contextPercent = o.int("context_percent"),
+            contextUsed = o.long("context_used"),
+            contextMax = o.long("context_max"),
+            creditLines = o.strings("credits_lines"),
+        )
     }
 }

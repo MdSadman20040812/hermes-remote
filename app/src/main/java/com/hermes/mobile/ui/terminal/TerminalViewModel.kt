@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.hermes.mobile.core.connection.ConnState
 import com.hermes.mobile.core.connection.ConnectionManager
-import com.hermes.mobile.core.connection.CredentialStrategy
 import com.hermes.mobile.core.terminal.PtyChannel
 import com.hermes.mobile.core.terminal.PtyChannelFactory
 import com.hermes.mobile.core.terminal.PtySanitizer
@@ -59,11 +58,6 @@ class TerminalViewModel @Inject constructor(
             _userMessage.tryEmit("Not connected to your PC")
             return
         }
-        val secret = connectionManager.vaultSecret(profile.id)
-        if (secret == null) {
-            _userMessage.tryEmit("No credential for ${profile.label}")
-            return
-        }
         reconnectJob?.cancel()
         pumpJob?.cancel()
         channel?.close()
@@ -74,8 +68,24 @@ class TerminalViewModel @Inject constructor(
         val ch = ptyChannelFactory.newChannel(viewModelScope)
         channel = ch
 
-        val url = CredentialStrategy.Token(secret).wsUrl(profile.wsBase, "/api/pty")
-        ch.connect(url)
+        // Gated deployments need a FRESH single-use ticket for this socket —
+        // the /api/ws ticket is already spent. ConnectionManager mints it, so
+        // the terminal works on loopback and tailnet alike.
+        viewModelScope.launch {
+            val url = try {
+                connectionManager.authorizedWsUrl("/api/pty")
+            } catch (e: Exception) {
+                _userMessage.tryEmit(
+                    "Terminal auth failed: ${e.message ?: e.javaClass.simpleName}",
+                )
+                null
+            }
+            if (url == null) {
+                _userMessage.tryEmit("No credential for ${profile.label}")
+                return@launch
+            }
+            ch.connect(url)
+        }
 
         pumpJob = viewModelScope.launch {
             launch {

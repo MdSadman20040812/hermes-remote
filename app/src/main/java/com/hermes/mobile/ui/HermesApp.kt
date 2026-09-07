@@ -1,49 +1,77 @@
 package com.hermes.mobile.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.hermes.mobile.core.connection.ConnState
 import com.hermes.mobile.ui.cockpit.CockpitScreen
 import com.hermes.mobile.ui.cockpit.CockpitViewModel
+import com.hermes.mobile.ui.cockpit.SessionSheet
 import com.hermes.mobile.ui.connect.ConnectScreen
 import com.hermes.mobile.ui.connect.ConnectViewModel
-import com.hermes.mobile.ui.home.HomeScreen
+import com.hermes.mobile.ui.components.ConnectionPill
+import com.hermes.mobile.ui.components.MetaChip
 import com.hermes.mobile.ui.ops.OpsScreen
 import com.hermes.mobile.ui.sessions.SessionsScreen
+import com.hermes.mobile.ui.terminal.TerminalScreen
 import com.hermes.mobile.ui.theme.HermesMobileTheme
 
-private val TAB_LABELS = listOf("Cockpit", "Sessions", "Ops")
-private val TAB_ICONS = listOf(Icons.Default.Email, Icons.Default.List, Icons.Default.Home)
-
 /**
- * App shell (Phase 2): Connect flow until paired, then the 3-tab adaptive
- * scaffold — Cockpit · Sessions · Ops (spec §D.1). Tabs hoist their
- * ViewModels to the activity so state survives tab switches.
+ * Four destinations, which is what a Material navigation bar is for and what
+ * this product actually has: the live conversation, its history, the raw TUI,
+ * and everything about the machine. `NavigationSuiteScaffold` promotes the bar
+ * to a rail on a tablet or an unfolded foldable without a second layout.
  */
+private enum class Destination(val label: String, val icon: ImageVector) {
+    COCKPIT("Cockpit", Icons.Outlined.Forum),
+    SESSIONS("Sessions", Icons.Outlined.History),
+    TERMINAL("Terminal", Icons.Outlined.Terminal),
+    OPS("Ops", Icons.Outlined.Tune),
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HermesApp(
     vm: ShellViewModel = hiltViewModel(),
@@ -54,21 +82,19 @@ fun HermesApp(
     HermesMobileTheme {
         val conn by vm.connState.collectAsState()
         val snackbar = remember { SnackbarHostState() }
-        var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+        var destination by rememberSaveable { mutableStateOf(Destination.COCKPIT.name) }
+        var sheetOpen by remember { mutableStateOf(false) }
+        val current = Destination.valueOf(destination)
 
         // Every ViewModel's userMessage channel lands here — errors are visible.
-        LaunchedEffect(Unit) {
-            connectVm.userMessage.collect { snackbar.showSnackbar(it) }
-        }
-        LaunchedEffect(Unit) {
-            cockpitVm.userMessage.collect { snackbar.showSnackbar(it) }
-        }
+        LaunchedEffect(Unit) { connectVm.userMessage.collect { snackbar.showSnackbar(it) } }
+        LaunchedEffect(Unit) { cockpitVm.userMessage.collect { snackbar.showSnackbar(it) } }
 
-        // Telegram doorbell / notification deep links → open that session.
+        // Doorbell / notification deep links → open that session.
         LaunchedEffect(Unit) {
             deepLinkBus.links.collect { storedId ->
                 cockpitVm.resumeAndOpen(storedId, "Linked session")
-                selectedTab = 0
+                destination = Destination.COCKPIT.name
             }
         }
 
@@ -76,50 +102,143 @@ fun HermesApp(
         LaunchedEffect(Unit) {
             vm.shareBus.shares.collect { text ->
                 cockpitVm.send(text)
-                selectedTab = 0
+                destination = Destination.COCKPIT.name
             }
         }
 
-        when (conn) {
-            is ConnState.Connected -> NavigationSuiteScaffold(
-                navigationSuiteItems = {
-                    TAB_LABELS.forEachIndexed { index, label ->
-                        item(
-                            selected = selectedTab == index,
-                            onClick = { selectedTab = index },
-                            icon = { Icon(TAB_ICONS[index], contentDescription = null) },
-                            label = { Text(label) },
-                            modifier = Modifier.semantics { contentDescription = "$label tab" },
-                        )
-                    }
+        // System Back returns to the Cockpit before it leaves the app — the
+        // predictive-back contract every Android user already has.
+        BackHandler(enabled = current != Destination.COCKPIT) {
+            destination = Destination.COCKPIT.name
+        }
+
+        if (conn !is ConnState.Connected) {
+            Scaffold(
+                snackbarHost = { SnackbarHost(snackbar) },
+                containerColor = MaterialTheme.colorScheme.background,
+            ) { padding ->
+                Box(Modifier.fillMaxSize().padding(padding)) {
+                    ConnectScreen(vm = connectVm)
+                }
+            }
+            return@HermesMobileTheme
+        }
+
+        NavigationSuiteScaffold(
+            navigationSuiteItems = {
+                Destination.entries.forEach { entry ->
+                    item(
+                        selected = current == entry,
+                        onClick = { destination = entry.name },
+                        icon = { Icon(entry.icon, contentDescription = null) },
+                        label = { Text(entry.label) },
+                        modifier = Modifier.semantics { contentDescription = "${entry.label} tab" },
+                    )
+                }
+            },
+        ) {
+            Scaffold(
+                topBar = {
+                    CenterAlignedTopAppBar(
+                        title = { CockpitTitle(cockpitVm, current.label) },
+                        navigationIcon = {
+                            if (current == Destination.COCKPIT) {
+                                IconButton(
+                                    onClick = { cockpitVm.createAndOpen() },
+                                    modifier = Modifier.semantics {
+                                        contentDescription = "Start a new session"
+                                    },
+                                ) { Icon(Icons.Outlined.Add, contentDescription = null) }
+                            }
+                        },
+                        actions = {
+                            if (current == Destination.COCKPIT) {
+                                IconButton(
+                                    onClick = {
+                                        cockpitVm.refreshUsage()
+                                        sheetOpen = true
+                                    },
+                                    modifier = Modifier.semantics {
+                                        contentDescription = "Session actions"
+                                    },
+                                ) { Icon(Icons.Outlined.MoreVert, contentDescription = null) }
+                            }
+                        },
+                        colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        ),
+                    )
                 },
-            ) {
-                Scaffold(
-                    snackbarHost = { SnackbarHost(snackbar) },
-                    containerColor = MaterialTheme.colorScheme.background,
-                ) { padding ->
-                    Box(Modifier.fillMaxSize().padding(padding)) {
-                        when (selectedTab) {
-                            0 -> CockpitScreen(vm = cockpitVm)
-                            1 -> SessionsScreen(onOpen = { summary ->
+                snackbarHost = { SnackbarHost(snackbar) },
+                containerColor = MaterialTheme.colorScheme.background,
+            ) { padding ->
+                Box(Modifier.fillMaxSize().padding(padding)) {
+                    when (current) {
+                        Destination.COCKPIT -> CockpitScreen(vm = cockpitVm)
+                        Destination.SESSIONS -> SessionsScreen(
+                            onOpen = { summary ->
                                 cockpitVm.resumeAndOpen(summary.id, summary.title)
-                                selectedTab = 0
-                            })
-                            2 -> OpsScreen()
-                        }
+                                destination = Destination.COCKPIT.name
+                            },
+                            onNew = {
+                                cockpitVm.createAndOpen()
+                                destination = Destination.COCKPIT.name
+                            },
+                        )
+                        Destination.TERMINAL -> TerminalScreen()
+                        Destination.OPS -> OpsScreen()
                     }
                 }
             }
-            else -> {
-                Scaffold(
-                    snackbarHost = { SnackbarHost(snackbar) },
-                    containerColor = MaterialTheme.colorScheme.background,
-                ) { padding ->
-                    Box(Modifier.fillMaxSize().padding(padding)) {
-                        ConnectScreen(vm = connectVm)
-                    }
-                }
-            }
+        }
+
+        if (sheetOpen) {
+            SessionSheet(vm = cockpitVm, onDismiss = { sheetOpen = false })
+        }
+    }
+}
+
+/**
+ * The cockpit's title carries the state you'd otherwise have to go looking
+ * for: which PC, which session, which model, how full the context is. On the
+ * other tabs it is just the tab name.
+ */
+@Composable
+private fun CockpitTitle(cockpitVm: CockpitViewModel, fallback: String) {
+    val conn by cockpitVm.connState.collectAsState()
+    val title by cockpitVm.activeTitle.collectAsState()
+    val model by cockpitVm.model.collectAsState()
+    val contextPercent by cockpitVm.contextPercent.collectAsState()
+
+    if (fallback != "Cockpit") {
+        Text(fallback, style = MaterialTheme.typography.titleMedium)
+        return
+    }
+
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.padding(end = 8.dp)) { ConnectionPill(conn, compact = true) }
+        Text(
+            title,
+            style = MaterialTheme.typography.titleSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        model?.let {
+            Spacer(Modifier.width(8.dp))
+            MetaChip(it.substringAfterLast('/'))
+        }
+        contextPercent?.takeIf { it > 0 }?.let {
+            Spacer(Modifier.width(6.dp))
+            MetaChip(
+                "$it%",
+                icon = Icons.Outlined.Bolt,
+                tone = if (it >= 85) MaterialTheme.colorScheme.error else null,
+            )
         }
     }
 }

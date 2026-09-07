@@ -3,9 +3,6 @@ package com.hermes.mobile.di
 import android.content.Context
 import androidx.room.Room
 import com.hermes.mobile.BuildConfig
-import com.hermes.mobile.core.connection.ConnectionManager
-import com.hermes.mobile.core.connection.HermesClientFactory
-import com.hermes.mobile.core.vault.SecureVault
 import com.hermes.mobile.data.local.HermesDatabase
 import dagger.Module
 import dagger.Provides
@@ -66,11 +63,4 @@ object AppModule {
     @Provides
     @Singleton
     fun provideOutboxDao(db: HermesDatabase) = db.outboxDao()
-
-    @Provides
-    @Singleton
-    fun provideConnectionManager(
-        vault: SecureVault,
-        clientFactory: HermesClientFactory,
-    ): ConnectionManager = ConnectionManager(vault, clientFactory)
 }

@@ -61,7 +61,7 @@ class TurnForegroundService : Service() {
         }
 
         fun stop(context: Context) {
-            context.startService(
+            context.stopService(
                 Intent(context, TurnForegroundService::class.java).setAction(ACTION_STOP),
             )
         }

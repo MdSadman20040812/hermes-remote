@@ -1,238 +1,300 @@
 package com.hermes.mobile.ui.ops
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.ListAlt
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Computer
+import androidx.compose.material.icons.outlined.Difference
+import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.Insights
+import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Subject
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.hermes.mobile.core.connection.ConnState
-import com.hermes.mobile.data.repo.str
+import com.hermes.mobile.ui.components.Meter
+import com.hermes.mobile.ui.components.NavRow
+import com.hermes.mobile.ui.components.SectionLabel
 import com.hermes.mobile.ui.files.FilesScreen
-import com.hermes.mobile.ui.home.HomeViewModel
-import com.hermes.mobile.ui.terminal.TerminalScreen
+import com.hermes.mobile.ui.home.ConnectionPanel
+import com.hermes.mobile.ui.theme.HermesMono
 
-private enum class OpsPane { MENU, TERMINAL, FILES }
+private enum class Pane(val title: String) {
+    MENU("Ops"),
+    FILES("Files"),
+    MODELS("Model"),
+    SKILLS("Skills"),
+    CRON("Schedule"),
+    GIT("Git"),
+    USAGE("Usage"),
+    LOGS("Logs"),
+    CONNECTION("This PC"),
+}
 
 /**
- * Ops tab: PC status summary + entry points to the embedded terminal and the
- * PC file browser (spec §D.1 — everything past Cockpit/Sessions lives here).
+ * Everything about the machine, one level down from the conversation.
+ *
+ * Ops is a menu of panels rather than a single scrolling wall because each of
+ * these hits a different, sometimes slow, server endpoint — and because a
+ * single wall would put "stop the gateway" one mis-scroll away from "list my
+ * skills".
  */
 @Composable
-fun OpsScreen(
-    vm: HomeViewModel = androidx.hilt.navigation.compose.hiltViewModel(),
-) {
-    var pane by rememberSaveable { mutableStateOf(OpsPane.MENU.name) }
+fun OpsScreen(vm: OpsViewModel = hiltViewModel()) {
+    var pane by rememberSaveable { mutableStateOf(Pane.MENU.name) }
+    val current = Pane.valueOf(pane)
 
-    when (OpsPane.valueOf(pane)) {
-        OpsPane.TERMINAL -> PaneScaffold(title = "Terminal", onBack = { pane = OpsPane.MENU.name }) {
-            TerminalScreen()
-        }
-        OpsPane.FILES -> PaneScaffold(title = "PC Files", onBack = { pane = OpsPane.MENU.name }) {
-            FilesScreen()
-        }
-        OpsPane.MENU -> OpsMenu(vm, onOpen = { pane = it.name })
+    // System Back leaves the panel, not the app.
+    BackHandler(enabled = current != Pane.MENU) { pane = Pane.MENU.name }
+
+    if (current == Pane.MENU) {
+        OpsMenu(vm) { pane = it.name }
+        return
     }
-}
 
-@Composable
-private fun PaneScaffold(
-    title: String,
-    onBack: () -> Unit,
-    content: @Composable () -> Unit,
-) {
     Column(Modifier.fillMaxSize()) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(
-                onClick = onBack,
-                modifier = Modifier.semantics { contentDescription = "Back to ops" },
-            ) { Text("← Ops") }
-            Text(title, style = MaterialTheme.typography.titleSmall)
+            IconButton(
+                onClick = { pane = Pane.MENU.name },
+                modifier = Modifier.semantics { contentDescription = "Back to Ops" },
+            ) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = null)
+            }
+            Text(current.title, style = MaterialTheme.typography.titleMedium)
         }
-        content()
+        when (current) {
+            Pane.FILES -> FilesScreen()
+            Pane.MODELS -> ModelPanel(vm)
+            Pane.SKILLS -> SkillsPanel(vm)
+            Pane.CRON -> CronPanel(vm)
+            Pane.GIT -> GitPanel(vm)
+            Pane.USAGE -> UsagePanel(vm)
+            Pane.LOGS -> LogsPanel(vm)
+            Pane.CONNECTION -> ConnectionPanel()
+            Pane.MENU -> Unit
+        }
     }
 }
 
 @Composable
-private fun OpsMenu(vm: HomeViewModel, onOpen: (OpsPane) -> Unit) {
+private fun OpsMenu(vm: OpsViewModel, onOpen: (Pane) -> Unit) {
     val conn by vm.connState.collectAsState()
     val channel by vm.channelState.collectAsState()
-    val opsVm: OpsViewModel = androidx.hilt.navigation.compose.hiltViewModel()
-    val stats by opsVm.stats.collectAsState()
-    val models by opsVm.models.collectAsState()
-    val currentModel by opsVm.currentModel.collectAsState()
-    val skills by opsVm.skills.collectAsState()
-    val cron by opsVm.cron.collectAsState()
+    val stats by vm.stats.collectAsState()
+    val models by vm.models.collectAsState()
+    var panicArmed by remember { mutableStateOf(false) }
 
-    androidx.compose.runtime.LaunchedEffect(Unit) { opsVm.refreshAll() }
+    LaunchedEffect(Unit) { vm.refreshOverview() }
 
     Column(
         Modifier
             .fillMaxSize()
-            .padding(24.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp)
+            .padding(bottom = 32.dp),
     ) {
-        Text("Ops", style = MaterialTheme.typography.headlineSmall)
-
         (conn as? ConnState.Connected)?.let { c ->
+            SectionLabel("Machine")
             Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(c.profile.label, style = MaterialTheme.typography.titleSmall)
-                    Text("${c.profile.host}:${c.profile.port}",
+                    Text(
+                        c.profile.displayAddress,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("Hermes v${c.status?.version ?: "?"} · gateway ${c.status?.gatewayState ?: "?"}",
-                        style = MaterialTheme.typography.bodySmall)
-                    Text("socket: ${channel.toString().substringAfterLast('.')}",
+                        fontFamily = HermesMono,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        "Hermes ${c.status?.version ?: "?"} · gateway " +
+                            "${c.status?.gatewayState ?: "unknown"} · socket " +
+                            channel.toString().substringAfterLast('.').lowercase(),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     stats?.let { s ->
-                        Text(
-                            "CPU ${s.str("cpu_percent") ?: s.str("cpu") ?: "?"} · " +
-                                "RAM ${s.str("memory_percent") ?: s.str("ram") ?: "?"}",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
+                        s.cpuPercent?.let { StatMeter("CPU", it) }
+                        s.memoryPercent?.let { StatMeter("Memory", it) }
+                        s.diskPercent?.let { StatMeter("Disk", it) }
                     }
                 }
             }
         }
 
-        OpsButton("Terminal", "Full Hermes TUI on your PC") { onOpen(OpsPane.TERMINAL) }
-        OpsButton("PC Files", "Browse, preview, download") { onOpen(OpsPane.FILES) }
-
-        // Model switcher
-        if (models.isNotEmpty()) {
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Model: ${currentModel ?: "?"}", style = MaterialTheme.typography.titleSmall)
-                    models.take(8).forEach { (label, id) ->
-                        TextButton(
-                            onClick = { opsVm.switchModel(id) },
-                            modifier = Modifier.semantics { contentDescription = "Switch to $label" },
-                        ) { Text(label, style = MaterialTheme.typography.bodySmall) }
-                    }
-                }
-            }
+        SectionLabel("Workspace")
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            NavRow(
+                "Files", "Browse and preview the PC's filesystem",
+                Icons.Outlined.FolderOpen,
+            ) { onOpen(Pane.FILES) }
+            NavRow(
+                "Git", "Branch, working tree, what changed",
+                Icons.Outlined.Difference,
+            ) { onOpen(Pane.GIT) }
         }
 
-        // Gateway controls
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.fillMaxWidth(),
+        SectionLabel("Agent")
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            NavRow(
+                "Model",
+                models?.currentModel ?: "Choose which model new sessions use",
+                Icons.Outlined.Memory,
+            ) { onOpen(Pane.MODELS) }
+            NavRow(
+                "Skills", "Turn capabilities on and off",
+                Icons.Outlined.AutoAwesome,
+            ) { onOpen(Pane.SKILLS) }
+            NavRow(
+                "Schedule", "Cron jobs, and running one now",
+                Icons.Outlined.Schedule,
+            ) { onOpen(Pane.CRON) }
+        }
+
+        SectionLabel("Diagnostics")
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            NavRow(
+                "Usage", "Tokens and spend over time",
+                Icons.Outlined.Insights,
+            ) { onOpen(Pane.USAGE) }
+            NavRow("Logs", "Tail the agent log", Icons.Outlined.Subject) { onOpen(Pane.LOGS) }
+            NavRow(
+                "This PC", "Paired machines, transport, unpairing",
+                Icons.Outlined.Computer,
+            ) { onOpen(Pane.CONNECTION) }
+        }
+
+        SectionLabel("Gateway")
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = { opsVm.gateway("restart") },
-                    modifier = Modifier.semantics { contentDescription = "Restart gateway" }) {
-                    Text("Restart gateway", style = MaterialTheme.typography.bodySmall)
-                }
-                TextButton(onClick = { opsVm.gateway("stop") },
-                    modifier = Modifier.semantics { contentDescription = "Stop gateway" }) {
-                    Text("Stop", color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall)
-                }
-                TextButton(onClick = { opsVm.gateway("start") },
-                    modifier = Modifier.semantics { contentDescription = "Start gateway" }) {
-                    Text("Start", style = MaterialTheme.typography.bodySmall)
-                }
-            }
+            OutlinedButton(
+                onClick = { vm.gateway("start") },
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+            ) { Text("Start") }
+            OutlinedButton(
+                onClick = { vm.gateway("restart") },
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+            ) { Text("Restart") }
         }
 
-        if (skills.isNotEmpty()) {
-            Text("Skills (${skills.size})", style = MaterialTheme.typography.titleSmall)
-            Text(skills.take(12).joinToString(" · "),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        if (cron.isNotEmpty()) {
-            Text("Cron (${cron.size})", style = MaterialTheme.typography.titleSmall)
-            cron.take(8).forEach {
-                Text(it, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-
-        // Panic button (spec §E.3 #18): two-step confirm → interrupt + stop gateway.
-        var panicArmed by remember { mutableStateOf(false) }
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = if (panicArmed) MaterialTheme.colorScheme.errorContainer
-            else MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier
-                .fillMaxWidth()
-                .semantics { contentDescription = "Panic button" },
+        // Two-step, because this stops message dispatch for every channel the
+        // gateway serves. One tap arms it; the label says exactly what happens.
+        SectionLabel("Stop everything")
+        Button(
             onClick = {
                 if (panicArmed) {
-                    opsVm.gateway("stop")
+                    vm.gateway("stop")
                     panicArmed = false
                 } else {
                     panicArmed = true
                 }
             },
+            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                containerColor = if (panicArmed) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.surfaceContainerHigh,
+                contentColor = if (panicArmed) MaterialTheme.colorScheme.onError
+                else MaterialTheme.colorScheme.error,
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 52.dp)
+                .semantics {
+                    contentDescription =
+                        if (panicArmed) "Confirm stopping the gateway" else "Stop the gateway"
+                },
         ) {
-            Column(Modifier.padding(16.dp)) {
-                Text(
-                    if (panicArmed) "Tap again to STOP the gateway" else "Panic",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = if (panicArmed) MaterialTheme.colorScheme.onErrorContainer
-                    else MaterialTheme.colorScheme.error,
-                )
-                Text(
-                    "Stops the messaging gateway and halts dispatch.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            Text(if (panicArmed) "Tap again to stop the gateway" else "Stop the gateway")
         }
+        Text(
+            "Halts dispatch on every messaging channel until you start it again.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp),
+        )
     }
 }
 
 @Composable
-private fun OpsButton(title: String, subtitle: String, onClick: () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier
-            .fillMaxWidth()
-            .semantics { contentDescription = title },
-        onClick = onClick,
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Text(title, style = MaterialTheme.typography.titleSmall)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+private fun StatMeter(label: String, percent: Double) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(56.dp),
+        )
+        Meter(
+            fraction = (percent / 100.0).toFloat(),
+            modifier = Modifier.weight(1f),
+            tone = when {
+                percent >= 90 -> MaterialTheme.colorScheme.error
+                percent >= 70 -> com.hermes.mobile.ui.theme.LocalHermesSemantics.current.warning
+                else -> MaterialTheme.colorScheme.primary
+            },
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            "${percent.toInt()}%",
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = HermesMono,
+            modifier = Modifier.width(38.dp),
+        )
+    }
+}
+
+/** Shared by every panel: a hairline while its endpoint is in flight. */
+@Composable
+internal fun PanelProgress(vm: OpsViewModel, tag: String) {
+    val busy by vm.busy.collectAsState()
+    if (busy == tag) {
+        LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
+    } else {
+        Spacer(Modifier.height(2.dp))
     }
 }

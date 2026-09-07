@@ -161,4 +161,20 @@ class RpcChannel(
         failAllPending("disconnect")
         ws?.close(1000, "client disconnect")
     }
+
+    /**
+     * Declare the socket dead from above (heartbeat timeout).
+     *
+     * A half-open TCP connection looks perfectly healthy from this side — the
+     * socket never fails, it simply goes quiet. Without an external liveness
+     * signal the app sits "Connected" and receives nothing, which is the worst
+     * of the failure modes because it does not even retry.
+     */
+    fun markDegraded(reason: String) {
+        val ws = socket
+        socket = null
+        failAllPending(reason)
+        ws?.cancel()
+        _state.value = ChannelState.Degraded(reason)
+    }
 }

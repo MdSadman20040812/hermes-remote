@@ -9,4 +9,5 @@
     <string name="notification_channel_system">Connection</string>
     <string name="permission_rationale_camera">Camera access is only used to scan the pairing QR code.</string>
     <string name="permission_rationale_notifications">Hermes needs notification permission to alert you when approvals or turns need you.</string>
+    <string name="widget_hint">Tap to open the cockpit</string>
 </resources>

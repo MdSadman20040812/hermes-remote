@@ -50,7 +50,18 @@ sealed interface TranscriptItem {
         val command: String?,
         val description: String?,
         val choices: List<String>,
+        /** Server allows "…and don't ask again this session". */
+        val allowSession: Boolean = false,
+        /** Server allows "…and remember permanently". */
+        val allowPermanent: Boolean = false,
         val resolved: String? = null, // the choice made, once answered
+    ) : TranscriptItem
+
+    /** Output of a slash command run from the composer. */
+    data class CommandOutput(
+        override val key: String,
+        val command: String,
+        val output: String,
     ) : TranscriptItem
 
     data class StatusLine(override val key: String, val text: String) : TranscriptItem
