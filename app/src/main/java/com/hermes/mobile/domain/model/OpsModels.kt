@@ -15,7 +15,15 @@ data class ProviderModels(
     val label: String,
     val models: List<String>,
     val authenticated: Boolean,
-)
+    /**
+     * Models the server lists but will refuse. `nous` returns all 48 of its
+     * models here when the portal has no entitlement for them; offering those
+     * as tappable rows is offering 48 guaranteed failures.
+     */
+    val unavailable: Set<String> = emptySet(),
+) {
+    fun isUsable(model: String): Boolean = model !in unavailable
+}
 
 data class ModelCatalog(
     val providers: List<ProviderModels>,

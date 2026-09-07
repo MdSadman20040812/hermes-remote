@@ -80,6 +80,11 @@ class OpsRepository @Inject constructor(
      * GET /api/model/options answers {providers:[{slug,models:[...]}], model,
      * provider}. The previous reader looked for "options"/"models" at the top
      * level, so the picker was always empty.
+     *
+     * `unavailable_models` is read too: a provider can list a model it will
+     * then refuse (the Nous portal returns all 48 of its models this way
+     * without an entitlement). Ignoring it means the picker shows rows whose
+     * only possible outcome is an error.
      */
     suspend fun modelCatalog(): ModelCatalog {
         val o = client().rest.getJson(base(), "/api/model/options").obj()
@@ -89,6 +94,7 @@ class OpsRepository @Inject constructor(
                 label = p.firstStr("label", "display_name", "name", "slug").orEmpty(),
                 models = p.strings("models"),
                 authenticated = p.bool("authenticated") || p.bool("is_authenticated"),
+                unavailable = p.strings("unavailable_models").toSet(),
             )
         }.filter { it.slug.isNotBlank() }
         return ModelCatalog(

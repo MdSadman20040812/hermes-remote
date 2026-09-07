@@ -20,6 +20,7 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -73,15 +74,31 @@ fun ModelPanel(vm: OpsViewModel) {
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                catalog!!.providers.filter { it.models.isNotEmpty() }.forEach { provider ->
+                // Order by what the user can actually pick. The Nous portal
+                // returns 48 models with all 48 unavailable, so source order
+                // opened the picker on a full screen of dead rows and buried
+                // the provider in use. Current provider first, then providers
+                // with usable models, then the rest.
+                catalog!!.providers
+                    .filter { it.models.isNotEmpty() }
+                    .sortedWith(
+                        compareByDescending<ProviderModels> {
+                            it.slug == catalog!!.currentProvider
+                        }.thenByDescending {
+                            it.models.count(it::isUsable)
+                        },
+                    )
+                    .forEach { provider ->
                     item(key = "hdr-${provider.slug}") {
                         ProviderHeader(provider)
                     }
                     items(provider.models, key = { "${provider.slug}/$it" }) { model ->
+                        val usable = provider.isUsable(model)
                         ModelRow(
                             model = model,
                             selected = model == catalog!!.currentModel &&
                                 provider.slug == catalog!!.currentProvider,
+                            usable = usable,
                             onClick = { vm.switchModel(provider.slug, model) },
                         )
                     }
@@ -112,16 +129,35 @@ fun ModelPanel(vm: OpsViewModel) {
 
 @Composable
 private fun ProviderHeader(provider: ProviderModels) {
+    val usable = provider.models.count(provider::isUsable)
     SectionLabel(
         provider.label.ifBlank { provider.slug },
         trailing = {
-            if (!provider.authenticated) MetaChip("not signed in")
+            when {
+                !provider.authenticated -> MetaChip("not signed in")
+                usable == 0 -> MetaChip("none available")
+                else -> MetaChip("$usable available")
+            }
         },
     )
 }
 
+/**
+ * One model.
+ *
+ * [usable] false means the server listed it but will refuse it. Such a row is
+ * shown dimmed and marked rather than hidden: silently dropping 48 of a
+ * provider's models looks like a broken picker, while offering them as
+ * tappable looks like a broken switch. Saying "unavailable" is the honest
+ * third option.
+ */
 @Composable
-private fun ModelRow(model: String, selected: Boolean, onClick: () -> Unit) {
+private fun ModelRow(
+    model: String,
+    selected: Boolean,
+    usable: Boolean,
+    onClick: () -> Unit,
+) {
     Surface(
         shape = RoundedCornerShape(10.dp),
         color = if (selected) MaterialTheme.colorScheme.primaryContainer
@@ -131,9 +167,13 @@ private fun ModelRow(model: String, selected: Boolean, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .clickable(onClick = onClick)
+            .then(if (usable) Modifier.clickable(onClick = onClick) else Modifier)
             .semantics {
-                contentDescription = if (selected) "$model, in use" else "Switch to $model"
+                contentDescription = when {
+                    selected -> "$model, in use"
+                    !usable -> "$model, unavailable on this provider"
+                    else -> "Switch to $model"
+                }
             },
     ) {
         Row(
@@ -146,8 +186,14 @@ private fun ModelRow(model: String, selected: Boolean, onClick: () -> Unit) {
                 fontFamily = HermesMono,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                color = if (usable) LocalContentColor.current
+                else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
+            if (!usable) {
+                Spacer(Modifier.width(8.dp))
+                MetaChip("unavailable")
+            }
             if (selected) {
                 Spacer(Modifier.width(8.dp))
                 Icon(Icons.Outlined.Check, contentDescription = null, Modifier.size(18.dp))
