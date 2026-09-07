@@ -35,6 +35,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.first
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -105,6 +107,19 @@ fun HermesApp(
                 destination = Destination.COCKPIT.name
             }
         }
+
+        // Shared FILES are uploaded to the PC, then the user is shown where
+        // they landed. Wait for a live connection first: a share that arrives
+        // during a cold start would otherwise fail on "Not connected" while the
+        // socket was two seconds from ready.
+        LaunchedEffect(Unit) {
+            vm.shareBus.files.collect { uris ->
+                snapshotFlow { conn }.first { it is ConnState.Connected }
+                vm.uploadShared(uris)
+            }
+        }
+
+        LaunchedEffect(Unit) { vm.userMessage.collect { snackbar.showSnackbar(it) } }
 
         // System Back returns to the Cockpit before it leaves the app — the
         // predictive-back contract every Android user already has.

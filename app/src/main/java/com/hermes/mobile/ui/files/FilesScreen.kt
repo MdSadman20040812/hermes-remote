@@ -3,10 +3,14 @@ package com.hermes.mobile.ui.files
 import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -26,10 +30,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.ArrowUpward
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Inbox
+import androidx.compose.material.icons.outlined.Upload
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -54,6 +62,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.hermes.mobile.data.repo.RemoteEntry
 import com.hermes.mobile.data.repo.RemoteFileContent
 import com.hermes.mobile.ui.components.EmptyState
+import com.hermes.mobile.ui.components.MetaChip
 import com.hermes.mobile.ui.components.SkeletonList
 import com.hermes.mobile.ui.theme.HermesMono
 import com.hermes.mobile.ui.theme.hermes
@@ -71,8 +80,24 @@ fun FilesScreen(vm: FilesViewModel = hiltViewModel()) {
     val listing by vm.listing.collectAsState()
     val loading by vm.loading.collectAsState()
     val preview by vm.preview.collectAsState()
+    val transfer by vm.transfer.collectAsState()
+    val receipt by vm.receipt.collectAsState()
 
-    LaunchedEffect(Unit) { if (listing == null) vm.browse(null) }
+    // OpenDocument (not GetContent): it returns a persistable URI for ANY file
+    // from any provider - Drive, Downloads, a gallery - which is what "send any
+    // file from my phone" actually requires.
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        android.util.Log.i("HermesShare", "picker returned uri=" + uri)
+        if (uri != null) vm.sendToPc(uri, intoCurrentDir = true)
+    }
+
+    // Start at the inbox, not at whatever cwd the server process happens to
+    // have. Running the dashboard as a SYSTEM service lands the default on
+    // C:\Windows\System32\config\systemprofile - three folders of nothing,
+    // and a long climb to anywhere useful.
+    LaunchedEffect(Unit) { if (listing == null) vm.browseInbox() }
     BackHandler(enabled = listing?.parent != null) { vm.up() }
 
     val entries = remember(listing) {
@@ -80,6 +105,7 @@ fun FilesScreen(vm: FilesViewModel = hiltViewModel()) {
             .sortedWith(compareByDescending<RemoteEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
     }
 
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
         if (loading) {
             LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
@@ -92,15 +118,34 @@ fun FilesScreen(vm: FilesViewModel = hiltViewModel()) {
                 Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    l.path.ifBlank { "managed roots" },
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = HermesMono,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
+                Column(Modifier.weight(1f)) {
+                    // The inbox is a place with a meaning, not just a path.
+                    // Naming it is what tells you where a sent file will land.
+                    if (vm.atInbox) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Outlined.Inbox,
+                                contentDescription = null,
+                                Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "Inbox from this phone",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
+                    Text(
+                        l.path.ifBlank { "managed roots" },
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = HermesMono,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 if (l.parent != null) {
                     IconButton(
                         onClick = { vm.up() },
@@ -122,6 +167,14 @@ fun FilesScreen(vm: FilesViewModel = hiltViewModel()) {
             listing == null && loading ->
                 SkeletonList(rows = 8, rowHeight = 44, modifier = Modifier.padding(16.dp))
 
+            entries.isEmpty() && vm.atInbox -> EmptyState(
+                icon = Icons.Outlined.Inbox,
+                title = "Nothing sent yet",
+                hint = "Tap Send a file to move anything from this phone onto " +
+                    "your PC \u2014 a photo, a PDF, a log \u2014 then ask Hermes to work " +
+                    "on it. Files you send land here.",
+            )
+
             entries.isEmpty() -> EmptyState(
                 icon = Icons.Outlined.FolderOff,
                 title = "Empty directory",
@@ -130,21 +183,69 @@ fun FilesScreen(vm: FilesViewModel = hiltViewModel()) {
             )
 
             else -> LazyColumn(
-                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 32.dp),
+                // Leave room for the FAB and the status cards; a list whose final row
+                // sits under a floating button is a row you cannot tap.
+                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 168.dp),
                 verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 items(entries, key = { it.path }) { entry ->
-                    EntryRow(entry, onClick = { vm.open(entry) })
+                    EntryRow(
+                        entry = entry,
+                        onClick = { vm.open(entry) },
+                        onSave = { vm.saveToPhone(entry) },
+                    )
                 }
             }
         }
     }
 
-    preview?.let { FilePreviewDialog(it, onClose = vm::closePreview) }
+        // Status lives at the bottom, above the FAB, where the thumb already is
+        // and where it cannot push the listing around while you are reading it.
+        Column(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TransferCard(transfer)
+            TransferReceipt(receipt, onDismiss = vm::dismissReceipt)
+        }
+
+        Box(Modifier.align(Alignment.BottomEnd)) {
+            SendFab(enabled = transfer == null) { picker.launch(arrayOf("*/*")) }
+        }
+    }
+
+    preview?.let {
+        FilePreviewDialog(
+            file = it,
+            onClose = vm::closePreview,
+            onSave = vm::savePreviewToPhone,
+        )
+    }
+}
+
+/**
+ * "Send a file" lives on a FAB rather than in a menu: moving a file off the
+ * phone is one of the two reasons to open this panel at all, and burying it
+ * behind an overflow makes the feature invisible.
+ */
+@Composable
+private fun SendFab(enabled: Boolean, onClick: () -> Unit) {
+    ExtendedFloatingActionButton(
+        onClick = { if (enabled) onClick() },
+        icon = { Icon(Icons.Outlined.Upload, contentDescription = null) },
+        text = { Text(if (enabled) "Send a file" else "Sending...") },
+        modifier = Modifier
+            .navigationBarsPadding()
+            .padding(16.dp)
+            .semantics { contentDescription = "Send a file from this phone to the PC" },
+    )
 }
 
 @Composable
-private fun EntryRow(entry: RemoteEntry, onClick: () -> Unit) {
+private fun EntryRow(entry: RemoteEntry, onClick: () -> Unit, onSave: () -> Unit) {
     Surface(
         shape = RoundedCornerShape(8.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -186,12 +287,31 @@ private fun EntryRow(entry: RemoteEntry, onClick: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            if (!entry.isDirectory) {
+                IconButton(
+                    onClick = onSave,
+                    modifier = Modifier.semantics {
+                        contentDescription = "Save ${entry.name} to this phone"
+                    },
+                ) {
+                    Icon(
+                        Icons.Outlined.Download,
+                        contentDescription = null,
+                        Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun FilePreviewDialog(file: RemoteFileContent, onClose: () -> Unit) {
+private fun FilePreviewDialog(
+    file: RemoteFileContent,
+    onClose: () -> Unit,
+    onSave: () -> Unit,
+) {
     val clipboard = LocalClipboardManager.current
     val semantics = MaterialTheme.hermes
 
@@ -276,6 +396,12 @@ private fun FilePreviewDialog(file: RemoteFileContent, onClose: () -> Unit) {
                             },
                         ) { Text("Copy") }
                     }
+                    TextButton(
+                        onClick = onSave,
+                        modifier = Modifier.heightIn(min = 48.dp).semantics {
+                            contentDescription = "Save ${file.name} to this phone"
+                        },
+                    ) { Text("Save to phone") }
                     TextButton(
                         onClick = onClose,
                         modifier = Modifier

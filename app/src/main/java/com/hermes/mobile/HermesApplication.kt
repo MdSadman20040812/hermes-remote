@@ -15,6 +15,7 @@ class HermesApplication : Application() {
     @Inject lateinit var notifier: HermesNotifier
     @Inject lateinit var outbox: OutboxRepository
 
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()

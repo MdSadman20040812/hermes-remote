@@ -1,0 +1,140 @@
+#requires -Version 5.1
+<#
+.SYNOPSIS
+  Make Hermes always-on: register the watchdog so the dashboard survives
+  crashes, logouts, and reboots.
+
+.DESCRIPTION
+  Registers ONE scheduled task, "Hermes Always On", that runs
+  `hermes-watchdog.ps1` at boot, at logon, and then every 2 minutes forever.
+
+  Why a repeating check instead of a long-lived service:
+  a supervisor process that loops can itself die, and then nothing is watching
+  the watcher. A stateless check re-run every 2 minutes has no such failure
+  mode - if a run crashes, the next one still fixes things. The check exits
+  immediately when the dashboard is healthy, so the steady-state cost is one
+  HTTP request to localhost every 2 minutes.
+
+  Run as SYSTEM with -AtStartup so the dashboard is up before you log in, and
+  keeps running after you log out.
+
+.EXAMPLE
+  # elevated PowerShell
+  powershell -ExecutionPolicy Bypass -File D:\HermesMobile\pc\install-always-on.ps1
+
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File D:\HermesMobile\pc\install-always-on.ps1 -Remove
+#>
+param(
+    [switch]$Remove,
+    [switch]$RunAsUser,
+    [int]$Port = 9119
+)
+
+$ErrorActionPreference = 'Stop'
+$TaskName = 'Hermes Always On'
+$Watchdog = Join-Path (Split-Path -Parent $PSCommandPath) 'hermes-watchdog.ps1'
+
+function Write-Ok($m)   { Write-Host "  $m" -ForegroundColor Green }
+function Write-Bad($m)  { Write-Host "  $m" -ForegroundColor Red }
+function Write-Step($m) { Write-Host "  $m" -ForegroundColor Cyan }
+
+$id = [Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Bad "This needs administrator rights."
+    Write-Host "  Right-click PowerShell, 'Run as administrator', then run this again."
+    exit 1
+}
+
+Write-Host ""
+Write-Host "Hermes - always-on setup" -ForegroundColor White
+Write-Host ""
+
+if ($Remove) {
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Write-Ok "Removed scheduled task '$TaskName'. The dashboard will no longer restart itself."
+    exit 0
+}
+
+if (-not (Test-Path $Watchdog)) { throw "Missing watchdog script: $Watchdog" }
+
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+    -Argument ("-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"{0}`" -Port {1}" -f $Watchdog, $Port)
+
+# Boot covers "PC restarted"; logon covers "task was somehow not running";
+# the repetition covers "dashboard died at 3am".
+$triggers = @()
+$atStartup = New-ScheduledTaskTrigger -AtStartup
+$triggers += $atStartup
+
+$atLogon = New-ScheduledTaskTrigger -AtLogOn
+$triggers += $atLogon
+
+# A repeating trigger needs a start time; begin one minute out.
+$repeat = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(1)) `
+    -RepetitionInterval (New-TimeSpan -Minutes 2)
+$triggers += $repeat
+
+$settings = New-ScheduledTaskSettingsSet `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable `
+    -MultipleInstances IgnoreNew `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 10) `
+    -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+
+if ($RunAsUser) {
+    # The dashboard runs as you: it can read your profile, your keys, your
+    # mapped drives. Choose this if SYSTEM cannot see something it needs.
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+    Write-Step "Principal: $env:USERNAME (interactive) - runs only while you are logged in"
+} else {
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    Write-Step "Principal: SYSTEM - starts before login and survives logout"
+}
+
+Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers `
+    -Settings $settings -Principal $principal `
+    -Description 'Keeps the Hermes dashboard answering on the LAN so the phone app can always reach it.' | Out-Null
+
+Write-Ok "Registered '$TaskName' (at boot, at logon, then every 2 minutes)."
+
+Start-ScheduledTask -TaskName $TaskName
+Write-Step "Kicked off the first run..."
+
+# Poll the LAN address, not just loopback: the dashboard binds ONLY to the LAN
+# IP, so a 127.0.0.1 check reports failure while the server is perfectly up.
+$lanIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.IPAddress -match '^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)' } |
+    Where-Object {
+        (Get-NetAdapter -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue).InterfaceDescription `
+            -notmatch 'Hyper-V|Virtual|VMware|Tailscale|Loopback'
+    } | Select-Object -First 1).IPAddress
+
+$deadline = (Get-Date).AddSeconds(45)
+$up = $false
+while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Seconds 2
+    foreach ($candidate in @($lanIp, '127.0.0.1')) {
+        if (-not $candidate) { continue }
+        try {
+            $r = Invoke-RestMethod -Uri "http://${candidate}:$Port/api/status" -TimeoutSec 3
+            if ($r.version) { $up = $true; break }
+        } catch { }
+    }
+    if ($up) { break }
+}
+
+Write-Host ""
+if ($up) {
+    Write-Ok "Dashboard is answering. Hermes will now stay up on its own."
+} else {
+    Write-Bad "Dashboard did not answer within 45s. Check pc\watchdog.log."
+}
+Write-Host ""
+Write-Host "  Status:  Get-ScheduledTask -TaskName '$TaskName'"
+Write-Host "  Log:     $(Join-Path (Split-Path -Parent $PSCommandPath) 'watchdog.log')"
+Write-Host "  Remove:  powershell -File `"$PSCommandPath`" -Remove"
+Write-Host ""

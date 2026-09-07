@@ -68,6 +68,17 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
             </intent-filter>
+            <!--
+              Share ANY file into Hermes. */* is deliberate: the point is to
+              hand the agent whatever is on the phone, and enumerating mime
+              types would silently exclude whatever was not listed.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
         </activity>
 
         <!-- Holds process importance while a turn is live; stops when idle -->
