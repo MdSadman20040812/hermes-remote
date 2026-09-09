@@ -20,3 +20,16 @@ Thumbs.db
 # Phase 0 probe secrets
 pc/.probe-token
 pc/.dashboard-password
+
+# Local device/runtime state - contains MAC addresses, DHCP IPs and host
+# identifiers for the paired phone. Machine-specific and privacy-sensitive:
+# never publish. Regenerated automatically at runtime.
+pc/known-devices.json
+pc/.watchdog-state
+pc/*.log
+
+# Build/install transcripts and vendored installers - noise, not source
+build_log.txt
+build-debug.log
+winget_install.log
+tailscale.apk

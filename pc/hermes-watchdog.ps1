@@ -78,10 +78,24 @@ function Get-LanIp {
     return $best
 }
 
+function Get-TailscaleIp {
+    # The phone reaches this PC over Tailscale when it is not on the home LAN.
+    # Get-LanIp deliberately skips the Tailscale adapter (it must not be chosen
+    # as the LAN bind), so resolve it separately here.
+    $ts = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.IPAddress -match '^100\.' } |
+        Select-Object -First 1
+    if ($ts) { return $ts.IPAddress }
+    return $null
+}
+
 function Test-Dashboard([string]$bindIp) {
     # NB: not $host - that is a PowerShell automatic variable and assigning to
     # it in a foreach throws at runtime (a parse check will not catch it).
-    foreach ($candidate in @($bindIp, '127.0.0.1')) {
+    # Probe every path the phone might use: LAN, Tailscale, loopback. A dashboard
+    # bound to 0.0.0.0 answers on all three; one bound to a stale LAN IP answers
+    # on none, which is the failure the phone sees as "paired but dead".
+    foreach ($candidate in @($bindIp, (Get-TailscaleIp), '127.0.0.1')) {
         if (-not $candidate) { continue }
         try {
             $r = Invoke-RestMethod -Uri "http://${candidate}:$Port/api/status" -TimeoutSec 4
@@ -94,28 +108,95 @@ function Test-Dashboard([string]$bindIp) {
 # ---------------------------------------------------------------------- run
 
 $lan = Get-LanIp
-if (-not $lan) {
-    if (Set-State 'no-network') { Write-Log "No LAN address; nothing to bind. Waiting for a network." }
-    exit 0
+$tailscale = Get-TailscaleIp
+if (-not $lan -and -not $tailscale) {
+    # v1 exited here whenever Get-LanIp returned nothing, which is what silently
+    # killed the phone link overnight on 2026-09-09 ("No LAN address; nothing to
+    # bind"). Tailscale alone is a perfectly good path to the phone, and even
+    # with no network at all the dashboard should still be up on loopback so the
+    # link restores the instant a network returns.
+    if (Set-State 'no-network') { Write-Log "No LAN and no Tailscale address. Will still serve loopback." }
 }
 
-$alive = Test-Dashboard $lan
+# Bind ALL interfaces. Binding a single LAN IP means a DHCP lease change, a
+# Wi-Fi/ethernet switch, or a Tailscale-only session leaves the dashboard
+# listening on an address the phone can no longer reach, with no error anywhere.
+$bind = '0.0.0.0'
+$probe = if ($lan) { $lan } elseif ($tailscale) { $tailscale } else { '127.0.0.1' }
+
+$alive = Test-Dashboard $probe
 if ($alive) {
-    if (Set-State "up:$lan") { Write-Log "Dashboard healthy on ${lan}:$Port" }
+    if (Set-State "up:$alive") { Write-Log "Dashboard healthy on ${alive}:$Port (lan=$lan ts=$tailscale)" }
     exit 0
 }
 
-# Not answering. If something is squatting the port, killing it is the caller's
-# call, not ours - report and let the next cycle retry rather than fighting it.
+# Not answering. A process may be holding the port without serving — a hung or
+# half-dead dashboard. The v1 policy was to report and leave it alone, which is
+# safe but means a zombie holds the port FOREVER: the phone keeps showing
+# "paired" and never reconnects, because nothing ever clears the squatter. That
+# is the single most common way this system fails in practice.
+#
+# So: leave a FOREIGN process alone (we do not know what it is), but reclaim the
+# port when the squatter is one of OUR OWN dashboards that has stopped
+# answering. Identified by matching the process image against the venv python
+# that this script launches, so an unrelated python service is never touched.
 $busy = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
 if ($busy) {
-    Write-Log "Port $Port is held by PID $($busy[0].OwningProcess) but not answering; leaving it alone."
-    Set-State 'port-busy' | Out-Null
-    exit 0
+    $squatterPid = [int]$busy[0].OwningProcess
+    $squatter = Get-Process -Id $squatterPid -ErrorAction SilentlyContinue
+    $isOurs = $false
+    if ($squatter) {
+        try {
+            $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$squatterPid" -ErrorAction Stop).CommandLine
+            # Ours if it is the dashboard module, or the interpreter we start it with.
+            if ($cmd -and ($cmd -match 'hermes_cli' -or $cmd -match [regex]::Escape($Python))) { $isOurs = $true }
+        } catch {
+            # No CIM access (e.g. a SYSTEM-owned process seen from a user token):
+            # fall back to the image path, which is still specific to our venv.
+            try { if ($squatter.Path -and $squatter.Path -eq $Python) { $isOurs = $true } } catch { }
+        }
+    }
+
+    if (-not $isOurs) {
+        # Last resort: we could not READ the process (a SYSTEM-owned process is
+        # opaque to a user token — both Path and CommandLine come back empty).
+        # Port $Port is Hermes's dedicated port by configuration, and this branch
+        # is only reached when /api/status has already failed. A python process
+        # squatting our own port while refusing to serve is, for our purposes,
+        # a dead Hermes: reclaim it. A non-python squatter is still left alone.
+        if ($squatter -and $squatter.ProcessName -like 'python*') {
+            Write-Log "Port $Port held by opaque python PID $squatterPid that is not answering; treating as a dead dashboard."
+            $isOurs = $true
+        }
+    }
+
+    if (-not $isOurs) {
+        Write-Log "Port $Port held by PID $squatterPid (not ours); leaving it alone."
+        Set-State 'port-busy-foreign' | Out-Null
+        exit 0
+    }
+
+    Write-Log "Port $Port held by our own unresponsive dashboard (PID $squatterPid). Reclaiming."
+    try {
+        Stop-Process -Id $squatterPid -Force -ErrorAction Stop
+    } catch {
+        # Running as a user against a SYSTEM-owned process: taskkill can still
+        # do it when this script itself runs elevated/as SYSTEM, which is how
+        # the scheduled task runs.
+        & taskkill.exe /F /PID $squatterPid 2>&1 | Out-Null
+    }
+    Start-Sleep -Seconds 2
+    $still = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    if ($still) {
+        Write-Log "Could not reclaim port $Port from PID $squatterPid; will retry next cycle."
+        Set-State 'port-stuck' | Out-Null
+        exit 0
+    }
+    Write-Log "Reclaimed port $Port."
 }
 
 Set-State 'starting' | Out-Null
-Write-Log "Dashboard not answering. Starting on ${lan}:$Port ..."
+Write-Log "Dashboard not answering. Starting on ${bind}:$Port (lan=$lan ts=$tailscale) ..."
 
 $password = $null
 $pwFile = Join-Path $Root '.dashboard-password'
@@ -139,7 +220,7 @@ $env:HERMES_HOME = $HermesHome
 
 $proc = Start-Process -FilePath $Python -PassThru -WindowStyle Hidden `
     -ArgumentList @('-m', 'hermes_cli.main', 'dashboard',
-                    '--host', $lan, '--port', "$Port", '--no-open', '--skip-build') `
+                    '--host', $bind, '--port', "$Port", '--no-open', '--skip-build') `
     -WorkingDirectory $AgentDir `
     -RedirectStandardOutput $stdout -RedirectStandardError $stderr
 
