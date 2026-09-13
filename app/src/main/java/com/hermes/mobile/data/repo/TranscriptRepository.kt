@@ -1,10 +1,14 @@
 package com.hermes.mobile.data.repo
 
+import com.hermes.mobile.core.attach.AttachmentRefs
 import com.hermes.mobile.core.transport.DeltaKind
 import com.hermes.mobile.core.transport.HermesClient
 import com.hermes.mobile.core.transport.HermesEvent
+import com.hermes.mobile.domain.model.AgentActivity
+import com.hermes.mobile.domain.model.ChatAttachment
 import com.hermes.mobile.domain.model.TranscriptItem
 import com.hermes.mobile.domain.model.TurnPhase
+import com.hermes.mobile.domain.model.activityPhraseFor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -29,6 +33,13 @@ import javax.inject.Singleton
  * One engine instance per ViewModel scope via [attach]; a fresh attach (new
  * session or post-reconnect reconcile) re-hydrates from session.history,
  * because the server is authoritative and local state is derived.
+ *
+ * **Tool calls are NOT transcript rows.** They stream into [activity] (a
+ * single changing status line) and [toolLog] (the Activity screen). A phone
+ * transcript that interleaves `terminal` invocations and their stdout between
+ * two sentences of a reply is unreadable, and it buries the answer the user
+ * unlocked their phone to read. The conversation shows conversation; the
+ * machine detail lives one tap away and loses nothing.
  */
 @Singleton
 class TranscriptRepository @Inject constructor() {
@@ -43,6 +54,14 @@ class TranscriptRepository @Inject constructor() {
 
         private val _turnPhase = MutableStateFlow(TurnPhase.IDLE)
         val turnPhase: StateFlow<TurnPhase> = _turnPhase.asStateFlow()
+
+        /** What the agent is doing, in words. Null when idle. */
+        private val _activity = MutableStateFlow<AgentActivity?>(null)
+        val activity: StateFlow<AgentActivity?> = _activity.asStateFlow()
+
+        /** Every tool call this session, newest last. Rendered on the Activity screen. */
+        private val _toolLog = MutableStateFlow<List<TranscriptItem.ToolCallItem>>(emptyList())
+        val toolLog: StateFlow<List<TranscriptItem.ToolCallItem>> = _toolLog.asStateFlow()
 
         /** Latest context-window fill from usage, for the cockpit meter. */
         private val _contextPercent = MutableStateFlow<Int?>(null)
@@ -59,6 +78,9 @@ class TranscriptRepository @Inject constructor() {
         private val thinkingBuf = StringBuilder()
         private var streamingAssistantKey: String? = null
         private var liveThinkingKey: String? = null
+
+        /** Tool calls in the CURRENT turn, for the step counter on the status line. */
+        private var turnSteps = 0
 
         @Volatile
         private var dirty = false
@@ -127,6 +149,17 @@ class TranscriptRepository @Inject constructor() {
             dirty = true
         }
 
+        private fun logTool(item: TranscriptItem.ToolCallItem) {
+            val current = _toolLog.value
+            val idx = current.indexOfFirst { it.key == item.key }
+            _toolLog.value = if (idx >= 0) {
+                // Preserve the original timestamp across the start -> complete update.
+                current.toMutableList().also { it[idx] = item.copy(atMillis = current[idx].atMillis) }
+            } else {
+                (current + item).takeLast(TOOL_LOG_CAP)
+            }
+        }
+
         private suspend fun handle(event: HermesEvent) {
             when (event) {
                 is HermesEvent.SessionInfo -> {
@@ -139,6 +172,8 @@ class TranscriptRepository @Inject constructor() {
                     thinkingBuf.clear()
                     streamingAssistantKey = null
                     liveThinkingKey = null
+                    turnSteps = 0
+                    _activity.value = AgentActivity("Thinking")
                 }
                 is HermesEvent.Delta -> when (event.kind) {
                     DeltaKind.MESSAGE -> {
@@ -146,6 +181,8 @@ class TranscriptRepository @Inject constructor() {
                         val key = streamingAssistantKey ?: nextKey("asst").also {
                             streamingAssistantKey = it
                         }
+                        // Mid-stream the text is still arriving, so file refs are
+                        // not resolved yet — that happens once on completion.
                         upsert(
                             TranscriptItem.AssistantMessage(
                                 key,
@@ -153,47 +190,74 @@ class TranscriptRepository @Inject constructor() {
                                 streaming = true,
                             ),
                         )
+                        _activity.value = AgentActivity("Writing a reply", steps = turnSteps)
                     }
                     DeltaKind.THINKING, DeltaKind.REASONING -> {
                         if (event.text.isBlank()) return
                         thinkingBuf.append(event.text)
                         val key = liveThinkingKey ?: nextKey("think").also { liveThinkingKey = it }
                         upsert(TranscriptItem.ThinkingBlock(key, thinkingBuf.toString(), live = true))
+                        _activity.value = AgentActivity("Thinking it through", steps = turnSteps)
                     }
                 }
-                is HermesEvent.ToolStart -> upsert(
-                    TranscriptItem.ToolCallItem(
-                        key = "tool-${event.toolId}",
-                        toolId = event.toolId,
-                        name = event.name,
-                        context = event.context,
-                        args = null, result = null, durationS = null,
-                        running = true,
-                    ),
-                )
-                is HermesEvent.ToolComplete -> upsert(
-                    TranscriptItem.ToolCallItem(
-                        key = "tool-${event.toolId}",
-                        toolId = event.toolId,
-                        name = event.name,
-                        context = null,
-                        args = event.args?.let { prettyArgs(it) },
-                        result = event.result?.let { prettyResult(it) },
-                        durationS = event.durationS,
-                        running = false,
-                        approvalNote = event.result.obj().str("approval"),
-                    ),
-                )
-                is HermesEvent.ApprovalRequest -> addApproval(event)
+                // Tool traffic leaves the conversation entirely: a status phrase
+                // for the chat, a full row for the Activity log.
+                is HermesEvent.ToolStart -> {
+                    turnSteps++
+                    logTool(
+                        TranscriptItem.ToolCallItem(
+                            key = "tool-${event.toolId}",
+                            toolId = event.toolId,
+                            name = event.name,
+                            context = event.context,
+                            args = null, result = null, durationS = null,
+                            running = true,
+                        ),
+                    )
+                    _activity.value = AgentActivity(
+                        phase = activityPhraseFor(event.name),
+                        detail = event.context?.take(72)?.takeIf { it.isNotBlank() },
+                        steps = turnSteps,
+                    )
+                }
+                is HermesEvent.ToolComplete -> {
+                    logTool(
+                        TranscriptItem.ToolCallItem(
+                            key = "tool-${event.toolId}",
+                            toolId = event.toolId,
+                            name = event.name,
+                            context = null,
+                            args = event.args?.let { prettyArgs(it) },
+                            result = event.result?.let { prettyResult(it) },
+                            durationS = event.durationS,
+                            running = false,
+                            approvalNote = event.result.obj().str("approval"),
+                        ),
+                    )
+                    if (_turnPhase.value == TurnPhase.RUNNING) {
+                        _activity.value = AgentActivity("Working through the results", steps = turnSteps)
+                    }
+                }
+                is HermesEvent.ApprovalRequest -> {
+                    _activity.value = AgentActivity("Waiting for your approval", running = false,
+                        steps = turnSteps)
+                    addApproval(event)
+                }
                 is HermesEvent.MessageComplete -> {
                     // The server sends the authoritative full text — replace the buffer.
                     val key = streamingAssistantKey ?: nextKey("asst")
+                    val full = event.text.ifBlank { assistantBuf.toString() }
+                    // Only now are file references complete enough to resolve:
+                    // a path split across two deltas would otherwise be scanned
+                    // half-written and produce a card pointing nowhere.
+                    val files = AttachmentRefs.attachmentsIn(full, key)
                     upsert(
                         TranscriptItem.AssistantMessage(
                             key = key,
-                            text = event.text.ifBlank { assistantBuf.toString() },
+                            text = if (files.isEmpty()) full else AttachmentRefs.strip(full),
                             streaming = false,
                             usageContextPercent = event.usage?.contextPercent,
+                            attachments = files,
                         ),
                     )
                     event.usage?.contextPercent?.let { _contextPercent.value = it }
@@ -211,10 +275,14 @@ class TranscriptRepository @Inject constructor() {
                     streamingAssistantKey = null
                     liveThinkingKey = null
                     _turnPhase.value = TurnPhase.IDLE
+                    _activity.value = null
                 }
                 is HermesEvent.SessionTitle -> { /* surfaced via the sessions list */ }
-                is HermesEvent.StatusUpdate -> event.text?.let {
-                    upsert(TranscriptItem.StatusLine(nextKey("status"), it))
+                // status.update is server plumbing ("compacting", "reconnecting").
+                // It belongs on the status line, not as a permanent transcript row.
+                is HermesEvent.StatusUpdate -> event.text?.takeIf { it.isNotBlank() }?.let {
+                    _activity.value = AgentActivity(it.replaceFirstChar(Char::uppercase),
+                        steps = turnSteps)
                 }
                 else -> { /* Ready/Global/Unknown — not transcript items */ }
             }
@@ -259,8 +327,70 @@ class TranscriptRepository @Inject constructor() {
         }
 
         /** Optimistic local echo of the user's own prompt. */
-        suspend fun echoUser(text: String) {
-            upsert(TranscriptItem.UserMessage(nextKey("user"), text))
+        suspend fun echoUser(text: String, attachments: List<ChatAttachment> = emptyList()) {
+            upsert(TranscriptItem.UserMessage(nextKey("user"), text, attachments))
+        }
+
+        /**
+         * Update an echoed user message in place as its attachments upload.
+         *
+         * Keyed by attachment id, not by position: a failed file must show its
+         * own error next to its own name, and re-keying by index would move the
+         * error onto whichever file happened to follow it.
+         */
+        suspend fun updateUserAttachment(messageKey: String, att: ChatAttachment) {
+            lock.withLock {
+                rows.indexOfFirst { it.key == messageKey }.takeIf { it >= 0 }?.let { idx ->
+                    (rows[idx] as? TranscriptItem.UserMessage)?.let { msg ->
+                        rows[idx] = msg.copy(
+                            attachments = msg.attachments.map { if (it.id == att.id) att else it },
+                        )
+                    }
+                }
+            }
+            dirty = true
+        }
+
+        /** The key of the most recent echoed user message, for attachment updates. */
+        suspend fun lastUserKey(): String? = lock.withLock {
+            rows.lastOrNull { it is TranscriptItem.UserMessage }?.key
+        }
+
+        /** Replace an attachment anywhere in the transcript (download completions). */
+        suspend fun replaceAttachment(att: ChatAttachment) {
+            lock.withLock {
+                for (i in rows.indices) {
+                    when (val row = rows[i]) {
+                        is TranscriptItem.UserMessage ->
+                            if (row.attachments.any { it.id == att.id }) {
+                                rows[i] = row.copy(
+                                    attachments = row.attachments.map {
+                                        if (it.id == att.id) att else it
+                                    },
+                                )
+                            }
+                        is TranscriptItem.AssistantMessage ->
+                            if (row.attachments.any { it.id == att.id }) {
+                                rows[i] = row.copy(
+                                    attachments = row.attachments.map {
+                                        if (it.id == att.id) att else it
+                                    },
+                                )
+                            }
+                        is TranscriptItem.AttachmentGroup ->
+                            if (row.attachments.any { it.id == att.id }) {
+                                rows[i] = row.copy(
+                                    attachments = row.attachments.map {
+                                        if (it.id == att.id) att else it
+                                    },
+                                )
+                            }
+                        else -> Unit
+                    }
+                }
+            }
+            dirty = true
+            publish()
         }
 
         /** A slash command's pager output, rendered inline in the transcript. */
@@ -280,35 +410,70 @@ class TranscriptRepository @Inject constructor() {
             dirty = true
         }
 
-        /** Cold-open / post-reconnect reconcile from the authoritative server. */
+        /**
+         * Cold-open / post-reconnect reconcile from the authoritative server.
+         *
+         * This is what makes history visible. `session.history` answers
+         * `{"messages":[{"role":…,"text":…}]}` — note **text**, not `content`.
+         * The previous reader looked for `content` first and fell back to a
+         * `content` parts array, so EVERY row decoded to the empty string and
+         * was then dropped by the blank filter: opening any existing chat, from
+         * the phone or started on the PC, showed nothing at all. It read as
+         * "history isn't synced"; the rows were arriving and being discarded.
+         *
+         * Empty is not the same as absent, either: a session whose history call
+         * fails must keep whatever is on screen, while one that genuinely has
+         * no messages must clear — hence the null/empty distinction below.
+         */
         suspend fun hydrateFromHistory() {
             val result = runCatching { client.sessionHistory(sessionId) }.getOrNull() ?: return
             val messages = result.obj().objects("messages")
-            if (messages.isEmpty()) return
             val rebuilt = mutableListOf<TranscriptItem>()
             var n = 0L
             for (o in messages) {
+                // display_kind="hidden" rows are model-facing scaffolding the
+                // server already filters; skill_invocation rows are real user
+                // turns and must stay.
                 when (o.str("role")) {
-                    "user" -> rebuilt.add(
-                        TranscriptItem.UserMessage("h-user-${n++}", o.messageText()),
-                    )
-                    "assistant" -> rebuilt.add(
-                        TranscriptItem.AssistantMessage("h-asst-${n++}", o.messageText()),
-                    )
-                    "tool" -> rebuilt.add(
+                    "user" -> {
+                        val key = "h-user-${n++}"
+                        val raw = o.messageText()
+                        val files = AttachmentRefs.attachmentsIn(raw, key)
+                        val text = if (files.isEmpty()) raw else AttachmentRefs.strip(raw)
+                        if (text.isNotBlank() || files.isNotEmpty()) {
+                            rebuilt.add(TranscriptItem.UserMessage(key, text, files))
+                        }
+                    }
+                    "assistant" -> {
+                        val key = "h-asst-${n++}"
+                        val raw = o.messageText()
+                        val files = AttachmentRefs.attachmentsIn(raw, key)
+                        val text = if (files.isEmpty()) raw else AttachmentRefs.strip(raw)
+                        if (text.isNotBlank() || files.isNotEmpty()) {
+                            rebuilt.add(TranscriptItem.AssistantMessage(key, text, attachments = files))
+                        }
+                    }
+                    // Historical tool rows go to the Activity log, never the chat.
+                    "tool" -> logTool(
                         TranscriptItem.ToolCallItem(
                             key = "h-tool-${n++}",
                             toolId = "",
                             name = o.firstStr("name", "tool_name") ?: "tool",
                             context = o.str("context"),
-                            args = null,
+                            args = o.objAt("args")?.let { prettyArgs(it) },
                             result = o.messageText().takeIf { it.isNotBlank() },
                             durationS = null,
                             running = false,
+                            atMillis = (o.dbl("timestamp") ?: 0.0).let {
+                                if (it > 0) (it * 1000).toLong() else System.currentTimeMillis()
+                            },
                         ),
                     )
                 }
             }
+            // A failed/absent fetch already returned above. An EMPTY answer is
+            // authoritative: a genuinely empty session must not keep showing a
+            // previous session's rows.
             lock.withLock {
                 rows.clear()
                 rows.addAll(rebuilt)
@@ -323,19 +488,31 @@ class TranscriptRepository @Inject constructor() {
 
     private companion object {
         val DEFAULT_CHOICES = listOf("once", "session", "deny")
+
+        /** Activity log ceiling — a long session must not grow without bound. */
+        const val TOOL_LOG_CAP = 400
     }
 }
 
 /**
- * History content is either a plain string or the multi-part content blocks the
- * provider returned. Flatten the text parts; anything else (images, tool
- * results) is represented by its type so the row is never silently empty.
+ * Text of one history message.
+ *
+ * The gateway's `_history_to_messages` projection emits `{"role","text"}` and
+ * nothing else for ordinary turns, so **`text` is checked first** — reading
+ * `content` first is what made every history row render blank. The `content`
+ * fallbacks below are for raw/legacy payloads (a plain string, or the
+ * provider's multi-part blocks) so an older server still renders.
  */
-private fun kotlinx.serialization.json.JsonObject?.messageText(): String {
+internal fun kotlinx.serialization.json.JsonObject?.messageText(): String {
+    this.str("text")?.let { return it }
     this.str("content")?.let { return it }
     val parts = this.arrAt("content") ?: return ""
     return parts.mapNotNull { part ->
-        part.obj()?.let { it.str("text") ?: it.str("type")?.let { t -> "[$t]" } }
+        part.obj()?.let {
+            it.str("text")
+                ?: it.str("content")
+                ?: it.str("type")?.let { t -> "[$t]" }
+        }
     }.joinToString("\n")
 }
 

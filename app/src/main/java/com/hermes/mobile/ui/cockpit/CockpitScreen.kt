@@ -11,7 +11,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -89,12 +91,18 @@ import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 import com.hermes.mobile.domain.model.SlashCommand
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.AttachFile
+import com.hermes.mobile.ui.components.ActivityStrip
+import com.hermes.mobile.ui.components.ComposerAttachmentStrip
+import com.hermes.mobile.ui.components.ArtifactCard
+import com.hermes.mobile.ui.components.AttachmentGroupView
 import com.hermes.mobile.domain.model.TranscriptItem
 import com.hermes.mobile.domain.model.TurnPhase
 import com.hermes.mobile.ui.components.CodeBlock
 import com.hermes.mobile.ui.components.EmptyState
 import com.hermes.mobile.ui.components.MarkdownText
-import com.hermes.mobile.ui.components.toolIconFor
 import com.hermes.mobile.ui.theme.HermesMono
 import com.hermes.mobile.ui.theme.hermes
 
@@ -112,10 +120,14 @@ import com.hermes.mobile.ui.theme.hermes
 fun CockpitScreen(
     vm: CockpitViewModel = hiltViewModel(),
     modifier: Modifier = Modifier,
+    onOpenActivity: () -> Unit = {},
 ) {
     val items by vm.items.collectAsState()
     val phase by vm.turnPhase.collectAsState()
+    val activity by vm.activity.collectAsState()
     val commands by vm.commands.collectAsState()
+    val pendingAttachments by vm.pendingAttachments.collectAsState()
+    val sending by vm.sending.collectAsState()
     val listState = rememberLazyListState()
     val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
@@ -158,10 +170,30 @@ fun CockpitScreen(
                 ) {
                     items(items, key = { it.key }) { item ->
                         when (item) {
-                            is TranscriptItem.UserMessage -> UserBubble(item.text)
-                            is TranscriptItem.AssistantMessage -> AssistantBlock(item)
+                            is TranscriptItem.UserMessage -> Column(
+                                horizontalAlignment = Alignment.End,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                if (item.attachments.isNotEmpty()) {
+                                    AttachmentGroupView(
+                                        attachments = item.attachments,
+                                        onOpen = vm::openAttachment,
+                                        onSave = vm::saveAttachment,
+                                        onNeedsFetch = vm::materialize,
+                                    )
+                                }
+                                if (item.text.isNotBlank()) UserBubble(item.text)
+                            }
+                            is TranscriptItem.AssistantMessage -> AssistantBlock(
+                                item,
+                                onOpen = vm::openAttachment,
+                                onSave = vm::saveAttachment,
+                                onNeedsFetch = vm::materialize,
+                            )
                             is TranscriptItem.ThinkingBlock -> ThinkingRow(item)
-                            is TranscriptItem.ToolCallItem -> ToolRow(item)
+                            // Tool calls deliberately do NOT render here — they
+                            // live on the Activity screen. See ActivityStrip.
+                            is TranscriptItem.ToolCallItem -> Unit
                             is TranscriptItem.CommandOutput -> CommandOutputRow(item)
                             is TranscriptItem.ApprovalCard -> ApprovalRow(
                                 item,
@@ -170,16 +202,24 @@ fun CockpitScreen(
                                 },
                             )
                             is TranscriptItem.StatusLine -> StatusRow(item.text)
+                            is TranscriptItem.ArtifactItem -> ArtifactCard(
+                                state = item.artifact,
+                                onRecompile = { vm.recompileArtifact(item.artifact) },
+                            )
+                            is TranscriptItem.AttachmentGroup -> AttachmentGroupView(
+                                attachments = item.attachments,
+                                onOpen = vm::openAttachment,
+                                onSave = vm::saveAttachment,
+                                onNeedsFetch = vm::materialize,
+                            )
                         }
-                    }
-                    if (phase == TurnPhase.RUNNING && items.none {
-                            (it as? TranscriptItem.AssistantMessage)?.streaming == true
-                        }
-                    ) {
-                        item { WorkingRow() }
                     }
                 }
             }
+
+            // What the PC is doing right now, in one changing line. This is
+            // what replaced the inline terminal spam.
+            ActivityStrip(activity = activity, onOpenActivity = onOpenActivity)
 
             AnimatedVisibility(
                 visible = phase == TurnPhase.RUNNING,
@@ -194,6 +234,11 @@ fun CockpitScreen(
                 onSend = vm::send,
                 onSlash = vm::runSlashCommand,
                 onOpenCommands = vm::loadCommands,
+                pendingAttachments = pendingAttachments,
+                onAttach = vm::attachUri,
+                onRemoveAttachment = vm::removeAttachment,
+                sending = sending,
+                onSendDetached = vm::sendDetached,
             )
         }
 
@@ -243,9 +288,19 @@ private fun UserBubble(text: String) {
 /**
  * The agent's own words. Rendered as Markdown, because that is what it writes:
  * a fenced command and the sentence introducing it used to look identical.
+ *
+ * Files the agent produced are rendered as real cards underneath, not as the
+ * raw `@image:D:/…` / `MEDIA:` markers it writes — those are a machine handle,
+ * and a Windows path wrapped across three lines of a phone screen is not an
+ * answer to "send me the deck".
  */
 @Composable
-private fun AssistantBlock(item: TranscriptItem.AssistantMessage) {
+private fun AssistantBlock(
+    item: TranscriptItem.AssistantMessage,
+    onOpen: (com.hermes.mobile.domain.model.ChatAttachment) -> Unit = {},
+    onSave: (com.hermes.mobile.domain.model.ChatAttachment) -> Unit = {},
+    onNeedsFetch: (com.hermes.mobile.domain.model.ChatAttachment) -> Unit = {},
+) {
     val clipboard = LocalClipboardManager.current
     Column(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -279,7 +334,18 @@ private fun AssistantBlock(item: TranscriptItem.AssistantMessage) {
                 }
             }
         }
-        MarkdownText(item.text, Modifier.padding(top = 2.dp))
+        if (item.text.isNotBlank()) {
+            MarkdownText(item.text, Modifier.padding(top = 2.dp))
+        }
+        if (item.attachments.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            AttachmentGroupView(
+                attachments = item.attachments,
+                onOpen = onOpen,
+                onSave = onSave,
+                onNeedsFetch = onNeedsFetch,
+            )
+        }
         if (item.streaming) {
             Caret()
         }
@@ -352,93 +418,6 @@ private fun ThinkingRow(item: TranscriptItem.ThinkingBlock) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp),
                 )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ToolRow(item: TranscriptItem.ToolCallItem) {
-    var expanded by remember { mutableStateOf(false) }
-    val semantics = MaterialTheme.hermes
-    val hasDetail = item.args != null || item.result != null
-
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = RoundedCornerShape(10.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 44.dp)
-            .then(if (hasDetail) Modifier.clickable { expanded = !expanded } else Modifier)
-            .semantics { contentDescription = "Tool ${item.name}" },
-    ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    toolIconFor(item.name),
-                    contentDescription = null,
-                    Modifier.size(15.dp),
-                    tint = if (item.running) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.width(9.dp))
-                Text(
-                    item.name,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontFamily = HermesMono,
-                )
-                item.context?.takeIf { it.isNotBlank() }?.let {
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                } ?: Spacer(Modifier.weight(1f))
-                Spacer(Modifier.width(8.dp))
-                if (item.running) {
-                    CircularProgressIndicator(
-                        Modifier.size(13.dp),
-                        strokeWidth = 1.5.dp,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                } else {
-                    Text(
-                        item.durationS?.let { formatDuration(it) } ?: "done",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = semantics.success,
-                    )
-                }
-                if (hasDetail) {
-                    Icon(
-                        if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
-                        contentDescription = null,
-                        Modifier.padding(start = 4.dp).size(16.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            item.approvalNote?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-            }
-            AnimatedVisibility(expanded && hasDetail) {
-                Column(
-                    Modifier.padding(top = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    item.args?.takeIf { it.isNotBlank() }?.let { CodeBlock("arguments", it) }
-                    item.result?.takeIf { it.isNotBlank() }?.let {
-                        CodeBlock("result", it.take(4000))
-                    }
-                }
             }
         }
     }
@@ -607,19 +586,6 @@ private fun ApprovalChoices(
     }
 }
 
-@Composable
-private fun WorkingRow() {
-    Row(Modifier.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
-        Spacer(Modifier.width(10.dp))
-        Text(
-            "Hermes is working…",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Live turn + composer
 // ---------------------------------------------------------------------------
@@ -690,16 +656,22 @@ private fun LiveTurnBar(onInterrupt: () -> Unit, onSteer: (String) -> Unit) {
     }
 }
 
-@OptIn(ExperimentalPermissionsApi::class)
+@OptIn(ExperimentalPermissionsApi::class, ExperimentalFoundationApi::class)
 @Composable
 private fun Composer(
     commands: List<SlashCommand>,
     onSend: (String) -> Unit,
     onSlash: (String) -> Unit,
     onOpenCommands: () -> Unit,
+    pendingAttachments: List<com.hermes.mobile.domain.model.ChatAttachment> = emptyList(),
+    onAttach: (android.net.Uri) -> Unit = {},
+    onRemoveAttachment: (com.hermes.mobile.domain.model.ChatAttachment) -> Unit = {},
+    sending: Boolean = false,
+    onSendDetached: (String) -> Unit = {},
 ) {
     var text by remember { mutableStateOf("") }
     val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
     val voice = remember { com.hermes.mobile.core.voice.VoiceInputController(context) }
     val listening by voice.listening.collectAsState()
     val partial by voice.partial.collectAsState()
@@ -710,6 +682,13 @@ private fun Composer(
     }
 
     val micPermission = rememberPermissionState(android.Manifest.permission.RECORD_AUDIO)
+
+    // System picker; "*/*" so any app that can share a file can feed the chat.
+    // The URI is copied into app cache by the caller before upload, because a
+    // grant from another app can expire before a deferred upload runs.
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let(onAttach) }
 
     // Typing "/" opens the command list, filtered as you keep typing — the same
     // affordance the desktop TUI has, which is where these commands live.
@@ -741,14 +720,29 @@ private fun Composer(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
+            ComposerAttachmentStrip(
+                attachments = pendingAttachments,
+                onRemove = onRemoveAttachment,
+            )
             Row(
                 Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.Bottom,
             ) {
+                // Attach: any MIME type. The picker is the system one, so files
+                // from Drive/Photos/Downloads all arrive through the same path.
+                IconButton(onClick = { filePicker.launch(arrayOf("*/*")) }) {
+                    Icon(
+                        Icons.Default.AttachFile,
+                        contentDescription = "Attach a file",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
-                    placeholder = { Text("Message Hermes, or / for commands") },
+                    // Short enough to survive the attach + mic + send buttons
+                    // eating the row's width in a wide geometric face.
+                    placeholder = { Text("Message Hermes", maxLines = 1) },
                     maxLines = 5,
                     shape = RoundedCornerShape(22.dp),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
@@ -776,17 +770,36 @@ private fun Composer(
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                val canSend = text.isNotBlank()
+                val canSend = (text.isNotBlank() || pendingAttachments.isNotEmpty()) && !sending
+                // Long-press sends the task detached: it keeps running on the
+                // PC after the phone locks or the app is swiped away, which is
+                // the whole reason to start long work from a phone. Kept as a
+                // long-press rather than a second button so the common case
+                // stays a one-thumb tap.
                 FloatingActionButton(
-                    onClick = {
-                        if (!canSend) return@FloatingActionButton
-                        val payload = text
-                        text = ""
-                        if (payload.startsWith("/")) onSlash(payload) else onSend(payload)
-                    },
-                    modifier = Modifier.size(48.dp).semantics {
-                        contentDescription = "Send to Hermes"
-                    },
+                    onClick = {},
+                    modifier = Modifier
+                        .size(48.dp)
+                        .combinedClickable(
+                            enabled = canSend,
+                            onClick = {
+                                val payload = text
+                                text = ""
+                                if (payload.startsWith("/")) onSlash(payload) else onSend(payload)
+                            },
+                            onLongClick = {
+                                val payload = text
+                                if (payload.isNotBlank() && !payload.startsWith("/")) {
+                                    text = ""
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onSendDetached(payload)
+                                }
+                            },
+                        )
+                        .semantics {
+                            contentDescription =
+                                "Send to Hermes. Long-press to run it detached on your PC."
+                        },
                     containerColor = if (canSend) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.surfaceContainerHighest,
                     contentColor = if (canSend) MaterialTheme.colorScheme.onPrimary
@@ -794,7 +807,22 @@ private fun Composer(
                     elevation = androidx.compose.material3.FloatingActionButtonDefaults
                         .elevation(0.dp, 0.dp, 0.dp, 0.dp),
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, Modifier.size(20.dp))
+                    // While attachments stage, the button reports it rather
+                    // than looking dead — a multi-megabyte upload is seconds
+                    // of silence otherwise, and silence reads as "it ignored me".
+                    if (sending) {
+                        CircularProgressIndicator(
+                            Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = null,
+                            Modifier.size(20.dp),
+                        )
+                    }
                 }
             }
         }
@@ -831,10 +859,4 @@ private fun CommandSuggestions(matches: List<SlashCommand>, onPick: (SlashComman
             }
         }
     }
-}
-
-private fun formatDuration(seconds: Double): String = when {
-    seconds < 1 -> "${(seconds * 1000).toInt()}ms"
-    seconds < 60 -> String.format("%.1fs", seconds)
-    else -> "${(seconds / 60).toInt()}m ${(seconds % 60).toInt()}s"
 }

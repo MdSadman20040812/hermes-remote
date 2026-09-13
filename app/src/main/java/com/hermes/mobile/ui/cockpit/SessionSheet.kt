@@ -30,6 +30,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.ui.components.Meter
 import com.hermes.mobile.ui.components.NavRow
@@ -53,8 +61,13 @@ fun SessionSheet(vm: CockpitViewModel, onDismiss: () -> Unit) {
     val usage by vm.usage.collectAsState()
     val contextPercent by vm.contextPercent.collectAsState()
 
+    val approvalMode by vm.approvalMode.collectAsState()
+    val sessionAutonomous by vm.sessionAutonomous.collectAsState()
+
     var renaming by remember { mutableStateOf(false) }
     var draft by remember(title) { mutableStateOf(title) }
+
+    LaunchedEffect(Unit) { vm.refreshAutonomy() }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
@@ -129,6 +142,55 @@ fun SessionSheet(vm: CockpitViewModel, onDismiss: () -> Unit) {
                 }
             }
 
+            // ---- autonomy ----
+            // This is the control that decides how much the PC does without
+            // you. It lives in the session sheet, next to the context meter,
+            // because both answer the same question: how far can I let this
+            // run before I need to look at it again?
+            SectionLabel("How much it decides alone")
+            Text(
+                "Applies to your whole PC, exactly like the desktop's approval " +
+                    "setting — changing it here changes it there.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                AUTONOMY_MODES.forEach { (mode, label, blurb) ->
+                    AutonomyRow(
+                        label = label,
+                        blurb = blurb,
+                        selected = approvalMode == mode,
+                        // Unknown/unloaded mode selects nothing rather than
+                        // guessing: showing "Manual" as selected when the PC is
+                        // actually on "off" is worse than showing no selection.
+                        onClick = { vm.setApprovalMode(mode) },
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 52.dp)
+                    .clickable { vm.setSessionAutonomous(!sessionAutonomous) },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Run this chat unattended", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Just this session — your PC's default stays as it is.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = sessionAutonomous,
+                    onCheckedChange = { vm.setSessionAutonomous(it) },
+                )
+            }
+
             SectionLabel("Actions")
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 NavRow(
@@ -175,4 +237,54 @@ internal fun Long.thousands(): String = when {
     this >= 1_000_000 -> String.format("%.1fM", this / 1_000_000.0)
     this >= 1_000 -> String.format("%.1fk", this / 1_000.0)
     else -> toString()
+}
+
+/**
+ * The three modes the gateway actually supports (`approvals.mode`), in
+ * increasing order of trust. The copy is deliberately about consequences, not
+ * about the mechanism: "every risky action asks first" is a promise the user
+ * can check; "manual approval mode" is a label they have to decode.
+ */
+private val AUTONOMY_MODES = listOf(
+    Triple("manual", "Ask me first", "Every risky command waits for your tap."),
+    Triple("smart", "Ask only when it matters", "Your PC judges the risk and only interrupts for the real ones."),
+    Triple("off", "Full autonomy", "Nothing waits for you. Best for long jobs you've already decided on."),
+)
+
+@Composable
+private fun AutonomyRow(
+    label: String,
+    blurb: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer
+        else MaterialTheme.colorScheme.surfaceContainer,
+        contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+        else MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = "$label. $blurb" },
+    ) {
+        Row(
+            Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = selected, onClick = onClick)
+            Spacer(Modifier.width(6.dp))
+            Column(Modifier.weight(1f)) {
+                Text(label, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    blurb,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
 }

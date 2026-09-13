@@ -20,6 +20,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.ListAlt
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Computer
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Difference
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Insights
@@ -68,6 +69,7 @@ private enum class Pane(val title: String) {
     USAGE("Usage"),
     LOGS("Logs"),
     CONNECTION("This PC"),
+    APPEARANCE("Appearance"),
 }
 
 /**
@@ -113,6 +115,7 @@ fun OpsScreen(vm: OpsViewModel = hiltViewModel()) {
             Pane.USAGE -> UsagePanel(vm)
             Pane.LOGS -> LogsPanel(vm)
             Pane.CONNECTION -> ConnectionPanel()
+            Pane.APPEARANCE -> AppearancePanel()
             Pane.MENU -> Unit
         }
     }
@@ -206,6 +209,10 @@ private fun OpsMenu(vm: OpsViewModel, onOpen: (Pane) -> Unit) {
                 "This PC", "Paired machines, transport, unpairing",
                 Icons.Outlined.Computer,
             ) { onOpen(Pane.CONNECTION) }
+            NavRow(
+                "Appearance", "Typeface and reading comfort",
+                Icons.Outlined.Palette,
+            ) { onOpen(Pane.APPEARANCE) }
         }
 
         SectionLabel("Gateway")

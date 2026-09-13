@@ -18,6 +18,8 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -48,6 +50,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.hermes.mobile.core.connection.ConnState
+import com.hermes.mobile.ui.cockpit.ActivityScreen
 import com.hermes.mobile.ui.cockpit.CockpitScreen
 import com.hermes.mobile.ui.cockpit.CockpitViewModel
 import com.hermes.mobile.ui.cockpit.SessionSheet
@@ -67,8 +70,13 @@ import com.hermes.mobile.ui.theme.HermesMobileTheme
  * to a rail on a tablet or an unfolded foldable without a second layout.
  */
 private enum class Destination(val label: String, val icon: ImageVector) {
-    COCKPIT("Cockpit", Icons.Outlined.Forum),
-    SESSIONS("Sessions", Icons.Outlined.History),
+    COCKPIT("Chat", Icons.Outlined.Forum),
+    // The tool-call feed the conversation no longer carries. It is a top-level
+    // destination rather than a hidden panel because "what is it actually
+    // doing on my PC right now" is a question you ask mid-turn, one-handed,
+    // and it must never be more than one tap from the conversation.
+    ACTIVITY("Activity", Icons.Outlined.Bolt),
+    SESSIONS("History", Icons.Outlined.History),
     TERMINAL("Terminal", Icons.Outlined.Terminal),
     OPS("Ops", Icons.Outlined.Tune),
 }
@@ -80,9 +88,15 @@ fun HermesApp(
     connectVm: ConnectViewModel = hiltViewModel(),
     cockpitVm: CockpitViewModel = hiltViewModel(),
     deepLinkBus: DeepLinkBus = vm.deepLinkBus,
+    appearanceVm: com.hermes.mobile.ui.ops.AppearanceViewModel = hiltViewModel(),
 ) {
-    HermesMobileTheme {
+    // Read the stored typeface at the root so the choice is applied on the very
+    // first frame; resolving it deeper would flash the default font on launch.
+    val appFont by appearanceVm.font.collectAsState()
+    HermesMobileTheme(appFont = appFont) {
         val conn by vm.connState.collectAsState()
+        val toolLog by cockpitVm.toolLog.collectAsState()
+        val liveActivity by cockpitVm.activity.collectAsState()
         val snackbar = remember { SnackbarHostState() }
         var destination by rememberSaveable { mutableStateOf(Destination.COCKPIT.name) }
         var sheetOpen by remember { mutableStateOf(false) }
@@ -145,7 +159,19 @@ fun HermesApp(
                     item(
                         selected = current == entry,
                         onClick = { destination = entry.name },
-                        icon = { Icon(entry.icon, contentDescription = null) },
+                        icon = {
+                            // A live dot on Activity is the only signal that
+                            // work is happening while the user is on another
+                            // tab. Without it, moving tool calls out of the
+                            // chat would have made background work invisible.
+                            if (entry == Destination.ACTIVITY && liveActivity?.running == true) {
+                                BadgedBox(badge = { Badge() }) {
+                                    Icon(entry.icon, contentDescription = null)
+                                }
+                            } else {
+                                Icon(entry.icon, contentDescription = null)
+                            }
+                        },
                         label = { Text(entry.label) },
                         modifier = Modifier.semantics { contentDescription = "${entry.label} tab" },
                     )
@@ -189,7 +215,11 @@ fun HermesApp(
             ) { padding ->
                 Box(Modifier.fillMaxSize().padding(padding)) {
                     when (current) {
-                        Destination.COCKPIT -> CockpitScreen(vm = cockpitVm)
+                        Destination.COCKPIT -> CockpitScreen(
+                            vm = cockpitVm,
+                            onOpenActivity = { destination = Destination.ACTIVITY.name },
+                        )
+                        Destination.ACTIVITY -> ActivityScreen(entries = toolLog)
                         Destination.SESSIONS -> SessionsScreen(
                             onOpen = { summary ->
                                 cockpitVm.resumeAndOpen(summary.id, summary.title)

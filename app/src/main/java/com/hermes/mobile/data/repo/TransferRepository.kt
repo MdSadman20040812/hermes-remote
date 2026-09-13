@@ -35,6 +35,12 @@ data class SaveResult(
     val size: Long,
 )
 
+/** A PC file mirrored into app cache so a renderer can point at it. */
+data class CachedFile(
+    val uri: String,
+    val size: Long,
+)
+
 /**
  * File movement in both directions.
  *
@@ -146,6 +152,39 @@ class TransferRepository @Inject constructor(
         target.writeBytes(bytes)
         SaveResult(target.name, target.absolutePath, bytes.size.toLong())
     }
+
+    /**
+     * Mirror a PC file into app cache so a Compose renderer can point at it.
+     *
+     * An image the agent produced lives only on the desktop, and Coil cannot
+     * load `D:/out/chart.png` — without this, every file the PC sends is an
+     * empty box with a filename under it. Cached per remote path so scrolling
+     * past the same image twice costs one fetch.
+     *
+     * Returns a `file://` URI; the caller stores it on the attachment.
+     */
+    suspend fun cacheRemote(remotePath: String, displayName: String): CachedFile =
+        withContext(Dispatchers.IO) {
+            val base = base() ?: error("Not connected to your PC")
+            val dir = File(context.cacheDir, "remote").apply { mkdirs() }
+            // Hash the remote path so two files with the same basename in
+            // different directories do not collide in the cache.
+            val stamp = Integer.toHexString(remotePath.hashCode())
+            val safe = sanitize(displayName)
+            val target = File(dir, "$stamp-$safe")
+            if (target.exists() && target.length() > 0) {
+                return@withContext CachedFile(Uri.fromFile(target).toString(), target.length())
+            }
+            val encoded = URLEncoder.encode(remotePath, "UTF-8")
+            val bytes = client().rest.getBytes(base, "/api/files/download?path=$encoded")
+            // Write to a sibling .part and rename, so an interrupted fetch
+            // never leaves something that looks complete in the cache.
+            val part = File(dir, "$stamp-$safe.part")
+            part.writeBytes(bytes)
+            if (target.exists()) target.delete()
+            part.renameTo(target)
+            CachedFile(Uri.fromFile(target).toString(), bytes.size.toLong())
+        }
 
     /** `report.pdf` → `report (2).pdf` when the first is taken. */
     private fun uniqueFile(dir: File, rawName: String): File {

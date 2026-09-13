@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -29,63 +30,79 @@ import androidx.core.view.WindowCompat
 // of light, and light is not a wash of dark — because the real use scene is a
 // phone glanced at in a dark room and, less often, one held in daylight.
 
-/** Signature violet, at the tone each scheme needs. */
-private val VioletLight = Color(0xFF6A45E8)
-private val VioletDark = Color(0xFFA98BFF)
+/**
+ * Silver-green on layered black.
+ *
+ * The identity is a dark instrument panel: near-black grounds, brushed-silver
+ * text, and a single cool green that only appears where something is alive —
+ * an accent, a running state, a focused field. Green is a signal colour here,
+ * not decoration, so it is never used for large fills.
+ *
+ * Surfaces step in five discrete layers rather than one flat black. On OLED a
+ * single background makes every card edge disappear; the ladder from #050706
+ * to #1B2521 keeps depth readable without a single visible border.
+ */
+private val GreenAccent = Color(0xFF5FD3A0)   // primary signal
+private val GreenDeep = Color(0xFF1F6B4F)     // pressed / container
+private val GreenLight = Color(0xFF2E9E74)    // light-scheme primary
+private val SilverBright = Color(0xFFDCE5DF)  // primary text on dark
+private val SilverMuted = Color(0xFF8A9A92)   // secondary text on dark
 
 private val DarkColorScheme = darkColorScheme(
-    primary = VioletDark,
-    onPrimary = Color(0xFF24104F),
-    primaryContainer = Color(0xFF392A7A),
-    onPrimaryContainer = Color(0xFFE4DAFF),
-    inversePrimary = VioletLight,
+    primary = GreenAccent,
+    onPrimary = Color(0xFF00281A),
+    primaryContainer = GreenDeep,
+    onPrimaryContainer = Color(0xFFB9F5DA),
+    inversePrimary = GreenLight,
 
-    secondary = Color(0xFF7CC0FF),
-    onSecondary = Color(0xFF00325A),
-    secondaryContainer = Color(0xFF16436E),
-    onSecondaryContainer = Color(0xFFCFE5FF),
+    // Secondary is deliberately a desaturated silver, not a second hue: two
+    // competing accents on a dense control surface reads as noise.
+    secondary = Color(0xFFB6C4BC),
+    onSecondary = Color(0xFF1E2724),
+    secondaryContainer = Color(0xFF2A3531),
+    onSecondaryContainer = Color(0xFFD6E2DB),
 
-    tertiary = Color(0xFF5FE07A),
-    onTertiary = Color(0xFF00390F),
-    tertiaryContainer = Color(0xFF14532A),
-    onTertiaryContainer = Color(0xFFB8F5C4),
+    tertiary = Color(0xFF7FD8C4),
+    onTertiary = Color(0xFF00312A),
+    tertiaryContainer = Color(0xFF1B4A42),
+    onTertiaryContainer = Color(0xFFA8F0E1),
 
-    error = Color(0xFFFF897D),
-    onError = Color(0xFF5F1412),
-    errorContainer = Color(0xFF7A2420),
+    error = Color(0xFFFF9A8F),
+    onError = Color(0xFF4A1410),
+    errorContainer = Color(0xFF6B2620),
     onErrorContainer = Color(0xFFFFDAD5),
 
-    background = Color(0xFF0B0E14),
-    onBackground = Color(0xFFE6EDF3),
-    surface = Color(0xFF0B0E14),
-    onSurface = Color(0xFFE6EDF3),
-    surfaceVariant = Color(0xFF1C222B),
-    onSurfaceVariant = Color(0xFF9FABB8),
+    background = Color(0xFF050706),
+    onBackground = SilverBright,
+    surface = Color(0xFF050706),
+    onSurface = SilverBright,
+    surfaceVariant = Color(0xFF19211E),
+    onSurfaceVariant = SilverMuted,
 
-    surfaceContainerLowest = Color(0xFF07090E),
-    surfaceContainerLow = Color(0xFF11151C),
-    surfaceContainer = Color(0xFF161B23),
-    surfaceContainerHigh = Color(0xFF1C222B),
-    surfaceContainerHighest = Color(0xFF232A34),
+    surfaceContainerLowest = Color(0xFF030504),
+    surfaceContainerLow = Color(0xFF0A0F0D),
+    surfaceContainer = Color(0xFF0E1512),
+    surfaceContainerHigh = Color(0xFF141C19),
+    surfaceContainerHighest = Color(0xFF1B2521),
 
-    outline = Color(0xFF6C7783),
-    outlineVariant = Color(0xFF2B333D),
+    outline = Color(0xFF5F6F68),
+    outlineVariant = Color(0xFF2A3733),
     scrim = Color(0xFF000000),
-    inverseSurface = Color(0xFFE6EDF3),
-    inverseOnSurface = Color(0xFF16191F),
+    inverseSurface = SilverBright,
+    inverseOnSurface = Color(0xFF101614),
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = VioletLight,
+    primary = GreenLight,
     onPrimary = Color(0xFFFFFFFF),
-    primaryContainer = Color(0xFFE7DEFF),
-    onPrimaryContainer = Color(0xFF21005E),
-    inversePrimary = VioletDark,
+    primaryContainer = Color(0xFFBCEBD6),
+    onPrimaryContainer = Color(0xFF002014),
+    inversePrimary = GreenAccent,
 
-    secondary = Color(0xFF0B62C4),
+    secondary = Color(0xFF4A5A53),
     onSecondary = Color(0xFFFFFFFF),
-    secondaryContainer = Color(0xFFD4E6FF),
-    onSecondaryContainer = Color(0xFF001C3B),
+    secondaryContainer = Color(0xFFDCE6E0),
+    onSecondaryContainer = Color(0xFF141C19),
 
     tertiary = Color(0xFF176F33),
     onTertiary = Color(0xFFFFFFFF),
@@ -199,12 +216,14 @@ val MaterialTheme.hermes: HermesSemantics
 fun HermesMobileTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     /**
-     * Material You is off by default. The identity of this app is the same
-     * violet the desktop dashboard uses — deriving it from wallpaper would make
-     * the phone and the PC look like two different products. It is offered as
-     * an opt-in rather than removed.
+     * Material You is off by default. The identity of this app is the silver-
+     * green instrument look the desktop dashboard uses — deriving it from
+     * wallpaper would make the phone and the PC look like two different
+     * products. It is offered as an opt-in rather than removed.
      */
     dynamicColor: Boolean = false,
+    /** User-selected type. Rebuilds the scale so the choice reaches every role. */
+    appFont: AppFont = AppFont.DEFAULT,
     content: @Composable () -> Unit,
 ) {
     val scheme = when {
@@ -230,12 +249,15 @@ fun HermesMobileTheme(
         }
     }
 
+    val typography = remember(appFont) { hermesTypography(appFont.family()) }
+
     CompositionLocalProvider(
         LocalHermesSemantics provides if (darkTheme) DarkSemantics else LightSemantics,
+        LocalAppFont provides appFont,
     ) {
         MaterialTheme(
             colorScheme = scheme,
-            typography = HermesTypography,
+            typography = typography,
             shapes = HermesShapes,
             content = content,
         )
