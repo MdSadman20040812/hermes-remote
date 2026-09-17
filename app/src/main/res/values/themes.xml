@@ -1,0 +1,20 @@
+<resources>
+    <!--
+        The activity theme is the splash theme: installSplashScreen() only
+        takes effect when the Activity itself is themed with it, which is why
+        the splash previously never appeared. postSplashScreenTheme is what the
+        window becomes once Compose takes over.
+    -->
+    <style name="Theme.HermesMobile" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/hermes_window_light</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+    </style>
+
+    <style name="Theme.HermesMobile.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/hermes_window_light</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_mark</item>
+        <item name="postSplashScreenTheme">@style/Theme.HermesMobile</item>
+    </style>
+</resources>

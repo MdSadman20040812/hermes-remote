@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- LAN discovery needs to know the phone is on Wi-Fi and which /24 it holds -->
+
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+    <!-- Camera: QR pairing only -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Holds the RPC socket while a turn is live (Phase 3) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- Hold-to-talk voice prompts (Phase 6) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <application
+        android:name=".HermesApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:enableOnBackInvokedCallback="true"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.HermesMobile"
+
+        android:usesCleartextTraffic="true">
+
+        <!--
+          usesCleartextTraffic=true is deliberate and narrow: the dashboard
+          serves plain HTTP/WS on a private LAN address, and the app only ever
+          talks to a host the user paired by scanning a QR on that host's own
+          screen. Cleartext to a NON-private address is refused in code by
+          PrivateHosts.requirePrivate (Android's network-security-config takes
+          hostnames, not CIDR, so the restriction cannot be expressed there).
+        -->
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.HermesMobile.Splash"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density|fontScale"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Telegram doorbell deep links (Phase 3): hermes://session/<id> -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="hermes" android:host="session" />
+            </intent-filter>
+            <!-- "Send to Hermes" share-sheet target (Phase 4) -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <!--
+              Share ANY file into Hermes. */* is deliberate: the point is to
+              hand the agent whatever is on the phone, and enumerating mime
+              types would silently exclude whatever was not listed.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+
+        <!-- Holds process importance while a turn is live; stops when idle -->
+        <service
+            android:name=".service.TurnForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- Approval notification actions (Allow/Deny without opening the app) -->
+        <receiver
+            android:name=".core.notify.ApprovalActionReceiver"
+            android:exported="false" />
+
+        <!-- Home-screen widget (Phase 6) -->
+        <receiver
+            android:name=".ui.widget.HermesWidgetProvider"
+            android:exported="false"
+            android:label="Hermes Remote">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info" />
+        </receiver>
+
+        <!-- Quick Settings tile (Phase 6) -->
+        <service
+            android:name=".service.QuickTileService"
+            android:exported="true"
+            android:label="Hermes Remote"
+            android:icon="@drawable/ic_stat_hermes"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+    </application>
+
+</manifest>
