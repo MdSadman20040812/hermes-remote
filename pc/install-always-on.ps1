@@ -59,8 +59,13 @@ if ($Remove) {
 
 if (-not (Test-Path $Watchdog)) { throw "Missing watchdog script: $Watchdog" }
 
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-    -Argument ("-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"{0}`" -Port {1}" -f $Watchdog, $Port)
+$QuietWatchdog = Join-Path (Split-Path -Parent $PSCommandPath) 'hermes-watchdog-hidden.vbs'
+$QuietHost = Join-Path $env:WINDIR 'System32\wscript.exe'
+if (-not (Test-Path $QuietWatchdog)) { throw "Missing quiet watchdog: $QuietWatchdog" }
+if (-not (Test-Path $QuietHost)) { throw "Missing Windows Script Host: $QuietHost" }
+$action = New-ScheduledTaskAction -Execute $QuietHost `
+    -Argument ('//B //Nologo "{0}" {1}' -f $QuietWatchdog, $Port) `
+    -WorkingDirectory (Split-Path -Parent $PSCommandPath)
 
 # Boot covers "PC restarted"; logon covers "task was somehow not running";
 # the repetition covers "dashboard died at 3am".

@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<full-backup-content>
-    <exclude domain="database" path="hermes.db" />
-    <exclude domain="sharedpref" path="hermes_prefs" />
-    <exclude domain="sharedpref" path="hermes_secure_prefs" />
-</full-backup-content>
